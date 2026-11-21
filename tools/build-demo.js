@@ -29,7 +29,7 @@ ${client('Styles')}
 </head>
 <body>
 <div class="demo-banner">BẢN XEM THỬ · dữ liệu giả, chỉ nằm trong trang (tải lại = về ban đầu)<button onclick="demoBack()">↩ Quay lại</button></div>
-<header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án Nha khoa</a></header>
+<header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án</a><nav><a href="#" id="nav-dash">Tổng quan</a><a href="#" id="nav-patients">Bệnh nhân</a></nav></header>
 <main id="app"></main>
 <div id="toast" role="status"></div>
 <script>

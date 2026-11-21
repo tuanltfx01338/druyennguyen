@@ -99,3 +99,29 @@ test('parseImport: happy path, example rows, errors, dedupe, year from first vis
   assert.ok(msgs.some(m => m.startsWith('LanKham:6:') && m.includes('Ngày khám')));
   assert.equal(r.errors.length, 3);
 });
+
+test('lastMonths / addDays', () => {
+  assert.deepEqual([...L.lastMonths('2026-02-15', 4)], ['2025-11', '2025-12', '2026-01', '2026-02']);
+  assert.equal(L.addDays('2026-12-30', 3), '2027-01-02');
+});
+
+test('buildDashboard', () => {
+  const P = [{ patient_id: 'A', full_name: 'An', phone: '1' }, { patient_id: 'B', full_name: 'Bình', phone: '2' }];
+  const V = [
+    { visit_id: 1, patient_id: 'A', visit_date: '2026-11-21', cost: 1000, paid: 400, reason: 'Đau', next_appointment: '2026-11-21', source: 'app' },
+    { visit_id: 2, patient_id: 'A', visit_date: '2026-10-01', cost: 500, paid: 500, next_appointment: '2026-11-25', source: 'app' },
+    { visit_id: 3, patient_id: 'B', visit_date: '2026-06-02', cost: 300, paid: 0, next_appointment: '2026-11-28', source: 'import' },
+    { visit_id: 4, patient_id: 'B', visit_date: '2026-11-21', source: 'import-images' }, // photo container, not a visit
+    { visit_id: 5, patient_id: 'GONE', visit_date: '2026-11-21', cost: 9, paid: 0 },      // deleted patient
+    { visit_id: 6, patient_id: 'B', visit_date: '2025-01-01', cost: 100, paid: 0 },       // outside 6 months, still debt
+  ];
+  const d = JSON.parse(JSON.stringify(L.buildDashboard(P, V, '2026-11-21')));
+  assert.deepEqual(d.monthly.map(m => m.month), ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11']);
+  assert.deepEqual(d.monthly.map(m => m.visits), [1, 0, 0, 0, 1, 1]);
+  assert.equal(d.monthly[5].paid, 400);
+  assert.deepEqual(d.stats, { patients: 2, visitsToday: 1, visitsMonth: 1, paidMonth: 400, apptToday: 1, appt7: 2, totalDebt: 1000, debtorCount: 2 });
+  assert.deepEqual(d.upcoming.map(u => u.patient_id), ['A', 'B']); // A: latest visit's appointment (today), B within 7 days
+  assert.equal(d.upcoming[0].next_appointment, '2026-11-21');
+  assert.deepEqual(d.debtors.map(x => [x.patient_id, x.debt]), [['A', 600], ['B', 400]]);
+  assert.deepEqual(d.todayVisits.map(x => x.visit_id), [1]);
+});

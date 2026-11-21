@@ -213,4 +213,72 @@ function parseImport(bnRows, lkRows, opts) {
   return { patients: patients, errors: errors, warnings: warnings, skippedExisting: skippedExisting };
 }
 
+/** ['2026-06', …, '2026-11'] — the n months ending with today's month. */
+function lastMonths(today, n) {
+  var y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7));
+  var out = [];
+  for (var i = n - 1; i >= 0; i--) {
+    var mm = m - i, yy = y;
+    while (mm < 1) { mm += 12; yy--; }
+    out.push(yy + '-' + String(mm).padStart(2, '0'));
+  }
+  return out;
+}
+
+function addDays(dateStr, n) {
+  var p = dateStr.split('-').map(Number);
+  var d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
+  return d.toISOString().slice(0, 10);
+}
+
+/** Latest visit per patient whose next_appointment is within [from, to]. */
+function upcomingAppointments(patientsById, visits, from, to) {
+  var byPatient = {};
+  visits.forEach(function (v) {
+    if (!patientsById[v.patient_id] || !v.next_appointment || v.next_appointment < from || v.next_appointment > to) return;
+    var cur = byPatient[v.patient_id];
+    if (!cur || v.visit_date > cur.visit_date) byPatient[v.patient_id] = v;
+  });
+  return Object.keys(byPatient).map(function (pid) {
+    var v = byPatient[pid], p = patientsById[pid];
+    return { patient_id: pid, full_name: p.full_name, phone: p.phone, next_appointment: v.next_appointment, plan: v.plan };
+  }).sort(function (a, b) { return a.next_appointment.localeCompare(b.next_appointment) || a.full_name.localeCompare(b.full_name); });
+}
+
+/**
+ * Dashboard numbers from active patients/visits. "import-images" visits are containers for old photos,
+ * not real consultations → excluded from visit counts.
+ */
+function buildDashboard(patients, visits, today) {
+  var byId = {};
+  patients.forEach(function (p) { byId[p.patient_id] = p; });
+  visits = visits.filter(function (v) { return byId[v.patient_id]; });
+  var real = visits.filter(function (v) { return v.source !== 'import-images'; });
+  var months = lastMonths(today, 6);
+  var monthly = months.map(function (m) { return { month: m, visits: 0, paid: 0 }; });
+  var debtBy = {}, todayVisits = [];
+  real.forEach(function (v) {
+    var i = months.indexOf(String(v.visit_date).slice(0, 7));
+    if (i >= 0) { monthly[i].visits++; monthly[i].paid += Number(v.paid) || 0; }
+    var d = debtOf(v.cost, v.paid);
+    if (d) debtBy[v.patient_id] = (debtBy[v.patient_id] || 0) + d;
+    if (v.visit_date === today) todayVisits.push({ patient_id: v.patient_id, full_name: byId[v.patient_id].full_name,
+      visit_id: v.visit_id, reason: v.reason, diagnosis: v.diagnosis });
+  });
+  var debtors = Object.keys(debtBy).filter(function (k) { return debtBy[k] > 0; }).map(function (k) {
+    return { patient_id: k, full_name: byId[k].full_name, phone: byId[k].phone, debt: debtBy[k] };
+  }).sort(function (a, b) { return b.debt - a.debt; });
+  var upcoming = upcomingAppointments(byId, visits, today, addDays(today, 7));
+  var cur = monthly[monthly.length - 1];
+  return {
+    today: today,
+    stats: {
+      patients: patients.length, visitsToday: todayVisits.length, visitsMonth: cur.visits, paidMonth: cur.paid,
+      apptToday: upcoming.filter(function (a) { return a.next_appointment === today; }).length, appt7: upcoming.length,
+      totalDebt: debtors.reduce(function (s, d) { return s + d.debt; }, 0), debtorCount: debtors.length
+    },
+    monthly: monthly, todayVisits: todayVisits, upcoming: upcoming, debtors: debtors.slice(0, 10)
+  };
+}
+
 if (typeof module !== 'undefined') module.exports = {}; // allow plain require in tooling

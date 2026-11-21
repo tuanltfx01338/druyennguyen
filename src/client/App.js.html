@@ -55,7 +55,8 @@ function blobToBase64(blob) {
 let dirty = false;
 let uploadBusy = false;
 const routes = [
-  [/^$/, () => pageHome()],
+  [/^$/, () => pageDashboard()],
+  [/^patients$/, () => pagePatients()],
   [/^p\/new$/, () => pagePatientForm()],
   [/^p\/([^/]+)\/edit$/, m => pagePatientForm(m[1])],
   [/^p\/([^/]+)\/v\/new$/, m => pageVisitForm({ patientId: m[1] })],
@@ -77,10 +78,12 @@ function go(path, push = true) {
 function render(path) {
   window.scrollTo(0, 0);
   for (const [re, fn] of routes) { const m = path.match(re); if (m) return fn(m); }
-  pageHome();
+  pageDashboard();
 }
 function start() {
   document.getElementById('home-link').addEventListener('click', e => { e.preventDefault(); go(''); });
+  document.getElementById('nav-dash').addEventListener('click', e => { e.preventDefault(); go(''); });
+  document.getElementById('nav-patients').addEventListener('click', e => { e.preventDefault(); go('patients'); });
   google.script.history.setChangeHandler(e => { dirty = false; uploadBusy = false; render((e.state && e.state.path) || ''); });
   window.addEventListener('beforeunload', e => { if (dirty || uploadBusy) { e.preventDefault(); e.returnValue = ''; } });
   google.script.url.getLocation(loc => render(loc.hash || ''));
@@ -94,14 +97,15 @@ function patientRow(p) {
     h('div', { class: 'muted' }, [p.birth_year ? 'Sinh ' + p.birth_year : '', p.phone].filter(Boolean).join(' · ')));
 }
 
-function pageHome() {
-  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tìm tên (không dấu cũng được), mã BN hoặc SĐT…', autocomplete: 'off' });
+/* ---------- patients list (search) ---------- */
+let pendingQuery = '';
+function pagePatients() {
+  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tìm tên (không dấu cũng được), mã BN hoặc SĐT…', autocomplete: 'off', value: pendingQuery });
+  pendingQuery = '';
   const results = h('div', { class: 'list' });
   const from = h('input', { type: 'date', value: todayStr(-30) });
   const to = h('input', { type: 'date', value: todayStr() });
   const visitsBox = h('div', { class: 'list' });
-  const upcoming = h('div', { class: 'list' }, h('div', { class: 'muted' }, 'Đang tải…'));
-  const quota = h('div', { class: 'quota' });
 
   let timer, seq = 0;
   async function doSearch() {
@@ -110,8 +114,10 @@ function pageHome() {
     try {
       const list = await api('searchPatients', q.value);
       if (my !== seq) return;
-      results.replaceChildren(...(list.length ? list.map(patientRow)
-        : [h('div', { class: 'muted' }, q.value ? 'Không tìm thấy bệnh nhân' : 'Chưa có bệnh nhân nào')]));
+      results.replaceChildren(
+        h('div', { class: 'muted' }, q.value ? `${list.length} kết quả` : 'Cập nhật gần đây'),
+        ...(list.length ? list.map(patientRow)
+          : [h('div', { class: 'muted' }, q.value ? 'Không tìm thấy bệnh nhân' : 'Chưa có bệnh nhân nào')]));
     } catch (e) { results.replaceChildren(errBox(e, doSearch)); }
   }
   async function searchDates() {
@@ -130,24 +136,118 @@ function pageHome() {
     h('div', { class: 'row-actions' },
       h('button', { class: 'primary', onclick: () => go('p/new') }, '+ Bệnh nhân'),
       h('button', { onclick: () => go('import') }, 'Nhập dữ liệu cũ')),
-    h('section', { class: 'card' }, q, results),
+    h('section', { class: 'card' }, h('h3', {}, 'Bệnh nhân'), q, results),
     h('section', { class: 'card' }, h('h3', {}, 'Tìm theo ngày khám'),
-      h('div', { class: 'date-range' }, 'Từ', from, 'đến', to, h('button', { onclick: searchDates }, 'Lọc')), visitsBox),
-    h('section', { class: 'card' }, h('h3', {}, 'Hẹn tái khám 7 ngày tới'), upcoming),
-    quota);
+      h('div', { class: 'date-range' }, 'Từ', from, 'đến', to, h('button', { onclick: searchDates }, 'Lọc')), visitsBox));
   q.focus();
   doSearch();
+}
 
-  api('getUpcomingAppointments').then(list => upcoming.replaceChildren(...(list.length
-    ? list.map(a => link('p/' + a.patient_id, h('b', {}, fmtDate(a.next_appointment)), ' · ', a.full_name, ' ',
-        h('span', { class: 'muted' }, a.phone || ''), a.plan ? h('div', { class: 'muted' }, a.plan) : null))
-    : [h('div', { class: 'muted' }, 'Không có lịch hẹn')]))).catch(e => upcoming.replaceChildren(errBox(e)));
+/* ---------- dashboard (landing page) ---------- */
+const CHART_COLOR = '#00897b'; // single series; passes dataviz validator (lightness, chroma, contrast) on white
+const dayLabel = (d, today) => d === today ? 'Hôm nay' : d === addDaysStr(today, 1) ? 'Ngày mai' : fmtDate(d);
+function addDaysStr(s, n) { const [y, m, d] = s.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, d + n)); return t.toISOString().slice(0, 10); }
+const fmtShortMoney = n => n >= 1e9 ? (n / 1e9).toFixed(1).replace('.0', '') + ' tỷ' : n >= 1e6 ? (n / 1e6).toFixed(1).replace('.0', '') + ' tr' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
 
-  api('getStorageQuota').then(s => {
-    const pct = Math.round(s.ratio * 100);
-    quota.className = 'quota' + (s.ratio > 0.8 ? ' warn' : '');
-    quota.replaceChildren(`Dung lượng Drive: ${fmtSize(s.used)} / ${s.limit ? fmtSize(s.limit) : 'không giới hạn'} (${pct}%)`
-      + (s.ratio > 0.8 ? ' — sắp đầy, cần dọn hoặc mua thêm dung lượng' : ''),
+function statTile(label, value, sub, onclick, tone) {
+  return h(onclick ? 'button' : 'div', { class: 'stat' + (tone ? ' ' + tone : ''), onclick },
+    h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, value), sub ? h('div', { class: 'stat-sub' }, sub) : null);
+}
+
+/** Single-series column chart (one axis), value label on the current month, tap/hover shows the rest. */
+function monthChart(monthly, key, unitFmt) {
+  const max = Math.max(1, ...monthly.map(m => m[key]));
+  const step = niceStep(max / 2);
+  const top = Math.max(step * 2, step * Math.ceil(max / step));
+  const caption = h('div', { class: 'chart-cap' }, 'Chạm vào cột để xem số liệu');
+  const ticks = [0, top / 2, top].map(t => h('div', { class: 'grid-line', style: `bottom:${t / top * 100}%` }, h('span', {}, unitFmt(t))));
+  const bars = monthly.map((m, i) => {
+    const [y, mo] = m.month.split('-');
+    const text = `Tháng ${Number(mo)}/${y}: ${key === 'paid' ? fmtMoney(m[key]) : m[key] + ' lần khám'}`;
+    const show = () => { caption.textContent = text; cols.forEach(c => c.classList.remove('sel')); col.classList.add('sel'); };
+    const isLast = i === monthly.length - 1;
+    const col = h('button', { class: 'col', 'aria-label': text, onclick: show, onmouseenter: show },
+      h('div', { class: 'col-plot' },
+        h('div', { class: 'bar-wrap', style: `height:${m[key] / top * 100}%` },
+          isLast ? h('span', { class: 'col-val' }, unitFmt(m[key])) : null,
+          h('i', { style: `background:${CHART_COLOR}` }))),
+      h('div', { class: 'col-x' }, 'T' + Number(mo)));
+    return col;
+  });
+  const cols = bars;
+  return h('div', {}, h('div', { class: 'chart' }, h('div', { class: 'grid' }, ticks), h('div', { class: 'cols' }, bars)), caption);
+}
+function niceStep(x) {
+  if (x <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(x)));
+  return [1, 2, 5, 10].map(k => k * p).find(v => v >= x);
+}
+
+async function pageDashboard() {
+  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Tìm bệnh nhân: tên, mã, SĐT…', autocomplete: 'off',
+    onkeydown: e => { if (e.key === 'Enter') { pendingQuery = search.value; go('patients'); } } });
+  const quota = h('div', { class: 'quota' });
+  const shell = h('div', {}, h('div', { class: 'loading' }, 'Đang tải tổng quan…'));
+  mount(
+    h('section', { class: 'card' }, search,
+      h('div', { class: 'row-actions', style: 'margin:0' },
+        h('button', { class: 'primary', onclick: () => go('p/new') }, '+ Bệnh nhân'),
+        h('button', { onclick: () => go('patients') }, 'Danh sách bệnh nhân'),
+        h('button', { onclick: () => go('import') }, 'Nhập dữ liệu cũ'))),
+    shell, quota);
+
+  let d;
+  try { d = await api('getDashboard'); } catch (e) { return shell.replaceChildren(errBox(e, pageDashboard)); }
+  const s = d.stats;
+  const [y, m, dd] = d.today.split('-');
+  const listOrEmpty = (items, empty) => items.length ? items : [h('div', { class: 'muted', style: 'padding:6px' }, empty)];
+
+  let chartKey = 'visits';
+  const chartBox = h('div');
+  const segBtns = {};
+  const drawChart = k => {
+    chartKey = k;
+    Object.entries(segBtns).forEach(([kk, b]) => b.classList.toggle('active', kk === k));
+    chartBox.replaceChildren(monthChart(d.monthly, k, k === 'paid' ? fmtShortMoney : String));
+  };
+
+  shell.replaceChildren(
+    h('div', { class: 'dash-date' }, `Hôm nay ${dd}/${m}/${y}`),
+    h('div', { class: 'stats' },
+      statTile('Khám hôm nay', s.visitsToday, s.visitsToday ? 'lần khám' : 'chưa có'),
+      statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} hẹn trong 7 ngày`, () => document.getElementById('dash-appt').scrollIntoView({ behavior: 'smooth' })),
+      statTile('Khám tháng này', s.visitsMonth, 'lần khám'),
+      statTile('Đã thu tháng này', fmtShortMoney(s.paidMonth), fmtMoney(s.paidMonth)),
+      statTile('Công nợ', fmtShortMoney(s.totalDebt), `${s.debtorCount} bệnh nhân`, s.debtorCount ? () => document.getElementById('dash-debt').scrollIntoView({ behavior: 'smooth' }) : null, s.totalDebt ? 'warn' : ''),
+      statTile('Tổng bệnh nhân', s.patients, 'hồ sơ', () => go('patients'))),
+    h('div', { class: 'dash-grid' },
+      h('section', { class: 'card', id: 'dash-appt' }, h('h3', {}, `Hẹn tái khám 7 ngày tới (${d.upcoming.length})`),
+        h('div', { class: 'list' }, listOrEmpty(d.upcoming.map(a => link('p/' + a.patient_id,
+          h('span', { class: 'badge' + (a.next_appointment === d.today ? ' red' : ''), style: 'margin:0 6px 0 0' }, dayLabel(a.next_appointment, d.today)),
+          h('b', {}, a.full_name), ' ', h('span', { class: 'muted' }, a.phone || ''),
+          a.plan ? h('div', { class: 'muted' }, a.plan) : null)), 'Không có lịch hẹn'))),
+      h('section', { class: 'card' }, h('h3', {}, `Khám hôm nay (${d.todayVisits.length})`),
+        h('div', { class: 'list' }, listOrEmpty(d.todayVisits.map(v => link('p/' + v.patient_id,
+          h('b', {}, v.full_name), v.reason ? ' · ' + v.reason : '', v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null)),
+          'Chưa có lần khám nào hôm nay'))),
+      h('section', { class: 'card' },
+        h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, '6 tháng gần nhất'),
+          h('div', { class: 'seg' },
+            segBtns.visits = h('button', { onclick: () => drawChart('visits') }, 'Lần khám'),
+            segBtns.paid = h('button', { onclick: () => drawChart('paid') }, 'Đã thu'))),
+        chartBox),
+      h('section', { class: 'card', id: 'dash-debt' }, h('h3', {}, `Bệnh nhân còn nợ (${s.debtorCount})`),
+        h('div', { class: 'list' }, listOrEmpty(d.debtors.map(x => link('p/' + x.patient_id,
+          h('b', {}, x.full_name), ' ', h('span', { class: 'muted' }, x.phone || ''),
+          h('span', { class: 'debt' }, fmtMoney(x.debt)))), 'Không có công nợ')),
+        s.debtorCount > d.debtors.length ? h('div', { class: 'muted' }, `Hiển thị 10/${s.debtorCount} bệnh nhân nợ nhiều nhất`) : null)));
+  drawChart(chartKey);
+
+  api('getStorageQuota').then(q => {
+    const pct = Math.round(q.ratio * 100);
+    quota.className = 'quota' + (q.ratio > 0.8 ? ' warn' : '');
+    quota.replaceChildren(`Dung lượng Drive: ${fmtSize(q.used)} / ${q.limit ? fmtSize(q.limit) : 'không giới hạn'} (${pct}%)`
+      + (q.ratio > 0.8 ? ' — sắp đầy, cần dọn hoặc mua thêm dung lượng' : ''),
       h('div', { class: 'bar' }, h('i', { style: `width:${Math.min(pct, 100)}%` })));
   }).catch(() => {});
 }
@@ -223,12 +323,12 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
         h('button', { onclick: () => go('p/' + id + '/edit') }, 'Sửa thông tin'),
         h('button', { class: 'danger', onclick: async () => {
           if (!confirm(`Xoá hồ sơ ${p.full_name} (${p.patient_id})? Dữ liệu vẫn còn trong Google Sheet/Drive.`)) return;
-          try { await api('deletePatient', id); toast('Đã xoá hồ sơ'); go(''); } catch (e) { toast(errMsg(e), 'error'); }
+          try { await api('deletePatient', id); toast('Đã xoá hồ sơ'); go('patients'); } catch (e) { toast(errMsg(e), 'error'); }
         } }, 'Xoá hồ sơ')))];
   }
 
   mount(
-    h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Danh sách')),
+    h('div', { class: 'row-actions' }, h('button', { onclick: () => go('patients') }, '← Danh sách')),
     h('section', { class: 'card' },
       h('div', { class: 'visit-head' }, h('h2', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)),
       h('div', { class: 'muted' }, [p.dob ? fmtDate(p.dob) : (p.birth_year ? 'Sinh ' + p.birth_year : ''), p.gender, p.phone].filter(Boolean).join(' · ')),

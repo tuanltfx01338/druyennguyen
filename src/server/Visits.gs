@@ -72,20 +72,15 @@ function searchVisitsByDate(from, to) {
 /** Appointments from today to today+7, one (latest) per patient. */
 function getUpcomingAppointments() {
   return api_('getUpcomingAppointments', function () {
-    var from = today_();
-    var to = Utilities.formatDate(new Date(Date.now() + 7 * 864e5), TZ, 'yyyy-MM-dd');
-    var names = {};
-    readActive_('Patients').forEach(function (p) { names[p.patient_id] = p; });
-    var byPatient = {};
-    readActive_('Visits').forEach(function (v) {
-      if (!names[v.patient_id] || !v.next_appointment || v.next_appointment < from || v.next_appointment > to) return;
-      var cur = byPatient[v.patient_id];
-      if (!cur || v.visit_date > cur.visit_date) byPatient[v.patient_id] = v;
-    });
-    return Object.keys(byPatient).map(function (pid) {
-      var v = byPatient[pid];
-      return { patient_id: pid, full_name: names[pid].full_name, phone: names[pid].phone,
-        next_appointment: v.next_appointment, plan: v.plan };
-    }).sort(function (a, b) { return a.next_appointment.localeCompare(b.next_appointment); });
+    var byId = {};
+    readActive_('Patients').forEach(function (p) { byId[p.patient_id] = p; });
+    return upcomingAppointments(byId, readActive_('Visits'), today_(), addDays(today_(), 7));
+  });
+}
+
+/** Landing page: today's work, appointments, 6-month trend, debts. */
+function getDashboard() {
+  return api_('getDashboard', function () {
+    return buildDashboard(readActive_('Patients'), readActive_('Visits'), today_());
   });
 }

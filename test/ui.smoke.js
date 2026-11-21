@@ -65,7 +65,7 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   const server = loadServer();
   const { w, d, calls } = boot(server);
   await until(() => btn(d, '+ Bệnh nhân'));
-  await until(() => d.body.textContent.includes('Chưa có bệnh nhân nào'));
+  await until(() => d.body.textContent.includes('Tổng bệnh nhân'));
 
   btn(d, '+ Bệnh nhân').click();
   await until(() => d.querySelector('[name=full_name]'));
@@ -153,5 +153,35 @@ test('import wizard: preview shows counts, blocks on errors, commits', async () 
   commit.click();
   await until(() => d.body.textContent.includes('Xong: tạo 2 hồ sơ'));
   assert.deepEqual(server.readActive_('Patients').map(p => p.patient_id).sort(), ['NK23-0001', 'NK' + String(new Date().getFullYear()).slice(-2) + '-0001'].sort());
+  w.close();
+});
+
+test('dashboard is the landing page: stats, appointments, chart toggle, debtors, search jumps to list', async () => {
+  const server = loadServer();
+  const pad = n => String(n).padStart(2, '0');
+  const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+  const a = server.savePatient({ full_name: 'Đỗ Minh Khang', phone: '0901000001' });
+  const b = server.savePatient({ full_name: 'Vũ Thu Hà' });
+  server.saveVisit({ patient_id: a, visit_date: today, reason: 'Đau răng', cost: 1000000, paid: 400000, next_appointment: today });
+  server.saveVisit({ patient_id: b, visit_date: today, cost: 200000, paid: 200000 });
+  const { w, d } = boot(server);
+  await until(() => d.querySelectorAll('.stat').length === 6);
+  const stat = label => [...d.querySelectorAll('.stat')].find(x => x.textContent.includes(label)).querySelector('.stat-value').textContent;
+  assert.equal(stat('Khám hôm nay'), '2');
+  assert.equal(stat('Hẹn hôm nay'), '1');
+  assert.equal(stat('Đã thu tháng này'), '600k');
+  assert.equal(stat('Công nợ'), '600k');
+  assert.equal(stat('Tổng bệnh nhân'), '2');
+  assert.match(d.body.textContent, /Hôm nayĐỗ Minh Khang/);
+  assert.equal(d.querySelectorAll('.chart .col').length, 6);
+  assert.equal(d.querySelector('.chart .col-val').textContent, '2');
+  btn(d, 'Đã thu').click();
+  assert.equal(d.querySelector('.chart .col-val').textContent, '600k');
+  d.querySelectorAll('.chart .col')[5].click();
+  assert.match(d.querySelector('.chart-cap').textContent, /600\.000 đ/);
+  const search = d.querySelector('input.search');
+  search.value = 'vu thu';
+  search.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter' }));
+  await until(() => [...d.querySelectorAll('.list .item b')].some(x => x.textContent === 'Vũ Thu Hà'));
   w.close();
 });
