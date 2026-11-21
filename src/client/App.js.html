@@ -30,10 +30,12 @@ const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round
 const errMsg = e => (e && e.message) || String(e);
 
 let toastTimer;
-function toast(msg, type = '') {
+/** action (optional): { label, onClick } — e.g. "Hoàn tác" after moving an appointment. */
+function toast(msg, type = '', action) {
   const t = document.getElementById('toast');
-  t.textContent = msg; t.className = 'show ' + type;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', type === 'error' ? 6000 : 3000);
+  t.replaceChildren(h('span', {}, msg), action ? h('button', { class: 'toast-act', onclick: () => { t.className = ''; action.onClick(); } }, action.label) : '');
+  t.className = 'show ' + type + (action ? ' has-action' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', action ? 7000 : type === 'error' ? 6000 : 3000);
 }
 function errBox(e, retry) {
   return h('div', { class: 'err' }, errMsg(e), ' ', retry ? h('button', { onclick: retry }, 'Thử lại') : null);

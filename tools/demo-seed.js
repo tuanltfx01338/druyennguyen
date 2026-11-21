@@ -90,6 +90,7 @@
 
   const DUR = [15, 30, 30, 45, 60, 60, 90, 120];
   const randTime = () => minToT(8 * 60 + 15 * Math.floor(rnd() * 44)); // 08:00–18:45
+  const toM = t => { const [hh, mm] = t.split(':').map(Number); return hh * 60 + mm; };
   const minToT = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
   const addVisit = (pid, date, proc, opts = {}) => {
     const next = opts.next_appointment;
@@ -166,11 +167,22 @@
     for (let k = 0; k < n; k++) {
       const timed = chance(0.92);
       const status = off < 0 ? (chance(0.8) ? 'arrived' : chance(0.5) ? 'no_show' : 'cancelled') : (chance(0.05) ? 'cancelled' : 'scheduled');
-      const r = S.saveAppointment({ patient_id: pick(pids), appt_date: dt, start_time: timed ? randTime() : '', duration_min: timed ? pick(DUR) : '',
+      // mostly free slots (a real clinic rarely double-books); ~1 in 6 days keeps an overlap to show the warning
+      let st = randTime(), du = pick(DUR);
+      const taken = S.listAppointments(dt, dt).filter(x => x.start_time && x.status !== 'cancelled');
+      const clash = (s0, d0) => taken.some(x => toM(x.start_time) < toM(s0) + d0 && toM(s0) < toM(x.start_time) + Number(x.duration_min));
+      for (let tries = 0; timed && clash(st, du) && tries < 12 && !(k === 1 && off % 6 === 0); tries++) { st = randTime(); du = pick(DUR); }
+      const r = S.saveAppointment({ patient_id: pick(pids), appt_date: dt, start_time: timed ? st : '', duration_min: timed ? du : '',
         title: pick(TITLES), notes: chance(0.15) ? 'Nhắc BN nhịn ăn 2 giờ trước' : '', status });
       void r;
     }
   }
+
+  // Two deliberate double-bookings (today and tomorrow) so the overlap warning is visible in the demo.
+  [0, 1].forEach(off => {
+    const first = S.listAppointments(day(off), day(off)).filter(a => a.start_time && a.status === 'scheduled').slice(-1)[0];
+    if (first) S.saveAppointment({ patient_id: pick(pids), appt_date: day(off), start_time: minToT(toM(first.start_time) + 15), duration_min: 30, title: 'Khám tổng quát' });
+  });
 
   // Today: results already recorded for the two earliest appointments (the rest still to do).
   S.listAppointments(day(0), day(0)).filter(a => a.start_time && a.status === 'scheduled').slice(0, 2).forEach((a, i) => {

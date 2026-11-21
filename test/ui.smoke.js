@@ -203,16 +203,19 @@ test('calendar: day/week/month views, overlap layout, tap slot → new appointme
   await until(() => btn(d, 'Ngày'));
   btn(d, 'Ngày').click(); // jsdom window is desktop-wide → default view is week
   await until(() => d.querySelectorAll('.tg-day').length === 1 && d.querySelectorAll('.tg-col .ev').length === 2);
-  assert.ok(d.querySelector('.cal-title').textContent.includes(today.split('-').reverse().join('/')));
+  assert.ok(d.querySelector('.cal-title b').textContent.endsWith(`${t.getDate()}/${t.getMonth() + 1}`));
   const evs = [...d.querySelectorAll('.tg-col .ev')];
   assert.match(evs[0].style.top, /^145px$/);                 // 09:00 → (540 − 360 min) × 0.8px + 1 (grid starts 06:00)
   assert.equal(d.querySelectorAll('.tg-hour').length, 15);   // 06:00–21:00
-  assert.match(evs[0].style.width, /calc\(50% - 3px\)/);     // overlapping → side by side
+  assert.match(evs[0].style.width, /calc\(50% - 4px\)/);     // overlapping → side by side
+  assert.equal(d.querySelectorAll('.tg-col .ev.conflict').length, 2);  // 09:00–10:00 and 09:30–10:00 overlap → warning style
+  assert.match(d.querySelector('.cal-summary').textContent, /2 hẹn bị trùng giờ/);
   assert.equal(d.querySelectorAll('.tg-allday .ev').length, 1);
 
-  evs[1].click();                                             // sheet with allergy + status buttons
+  evs[1].click();                                             // sheet with conflict warning, allergy, status buttons
   await until(() => d.querySelector('.sheet'));
   assert.match(d.querySelector('.sheet').textContent, /Dị ứng: Lidocaine/);
+  assert.match(d.querySelector('.warn-box').textContent, /Trùng giờ với Đỗ Minh Khang \(09:00–10:00\)/);
   btn(d, 'Đã đến').click();
   await until(() => d.querySelector('.tg-col .ev.st-arrived'));
 
@@ -322,5 +325,59 @@ test('record exam result from today\'s list: prefilled form, photos, appointment
   await until(() => d.querySelector('.tabs'));
   [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Tổng quan').click();
   await until(() => d.querySelector('.today-card') && /Lâm Mỹ Duyên.*Khám không hẹn/.test(d.querySelector('.today-card').textContent));
+  w.close();
+});
+
+test('calendar editing: drag to move, drag edge to resize, quick reschedule in sheet, undo; conflicts clear', async () => {
+  const server = loadServer();
+  const pad = n => String(n).padStart(2, '0');
+  const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+  const a = server.savePatient({ full_name: 'Đỗ Minh Khang' });
+  const b = server.savePatient({ full_name: 'Vũ Thu Hà' });
+  const ra = server.saveAppointment({ patient_id: a, appt_date: today, start_time: '09:00', duration_min: 60 });
+  const rb = server.saveAppointment({ patient_id: b, appt_date: today, start_time: '09:30', duration_min: 30 });
+  const { w, d } = boot(server);
+  await until(() => d.querySelector('.stat'));
+  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Lịch hẹn').click();
+  await until(() => btn(d, 'Ngày'));
+  btn(d, 'Ngày').click();
+  await until(() => d.querySelectorAll('.tg-col .ev.conflict').length === 2);
+  const ptr = (el, type, x, y) => { const e = new w.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+    Object.defineProperty(e, 'pointerType', { value: 'mouse' }); Object.defineProperty(e, 'pointerId', { value: 1 }); el.dispatchEvent(e); };
+  const evOf = name => [...d.querySelectorAll('.tg-col .ev')].find(x => x.textContent.includes(name));
+
+  // move Vũ Thu Hà down 48px (= 60 min): 09:30 → 10:30
+  let ev = evOf('Vũ Thu Hà');
+  ptr(ev, 'pointerdown', 50, 100); ptr(ev, 'pointermove', 50, 120); ptr(ev, 'pointermove', 50, 148);
+  assert.match(ev.querySelector('.drag-label').textContent, /10:30–11:00/);
+  ptr(ev, 'pointerup', 50, 148);
+  await until(() => server.getAppointment(rb.appt_id).appointment.start_time === '10:30');
+  await until(() => d.querySelectorAll('.tg-col .ev.conflict').length === 0 && /Đã dời Vũ Thu Hà/.test(d.getElementById('toast').textContent));
+  assert.match(d.querySelector('.cal-summary').textContent, /Không trùng giờ/);
+
+  // resize Đỗ Minh Khang by dragging the bottom edge +72px (= 90 min): 60' → 150' → overlaps again
+  ev = evOf('Đỗ Minh Khang');
+  const handle = ev.querySelector('.ev-resize');
+  ptr(handle, 'pointerdown', 50, 200); ptr(ev, 'pointermove', 50, 230); ptr(ev, 'pointermove', 50, 272); ptr(ev, 'pointerup', 50, 272);
+  await until(() => server.getAppointment(ra.appt_id).appointment.duration_min === 150);
+  await until(() => d.querySelectorAll('.tg-col .ev.conflict').length === 2 && d.getElementById('toast').classList.contains('warn'));
+  assert.match(d.getElementById('toast').textContent, /trùng giờ với Vũ Thu Hà/);
+
+  // undo from the toast
+  d.querySelector('.toast-act').click();
+  await until(() => server.getAppointment(ra.appt_id).appointment.duration_min === 60);
+
+  // quick reschedule inside the sheet (no page change)
+  await until(() => evOf('Vũ Thu Hà'));
+  evOf('Vũ Thu Hà').click();
+  await until(() => d.querySelector('.sheet'));
+  btn(d, '🕒 Đổi giờ').click();
+  const qt = d.querySelector('.quick-edit input[type=time]');
+  qt.value = '14:00';
+  btn(d, '45\'').click();
+  btn(d, 'Lưu giờ mới').click();
+  await until(() => server.getAppointment(rb.appt_id).appointment.start_time === '14:00');
+  assert.equal(server.getAppointment(rb.appt_id).appointment.duration_min, 45);
+  assert.equal(d.querySelector('.cal-title b').textContent.length > 0, true); // still on the calendar
   w.close();
 });
