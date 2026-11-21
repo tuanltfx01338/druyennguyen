@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createGas } = require('./gas-mock');
 
-const ORDER = ['Lib', 'Repo', 'Main', 'Patients', 'Visits', 'Images', 'Import', 'Backup'];
+const ORDER = ['Lib', 'Repo', 'Main', 'Patients', 'Visits', 'Appointments', 'Images', 'Import', 'Backup'];
 function load(opts) {
   const gas = createGas(opts);
   const ctx = vm.createContext({ ...gas, Date, JSON, Math, Object, Array, String, Number, Promise });
@@ -22,7 +22,7 @@ const yy = String(year).slice(-2);
 test('setup is idempotent and creates all tables', () => {
   const { s, sheet } = load();
   s.setup();
-  for (const t of ['Patients', 'Visits', 'Images', 'Counters', 'ImportLog']) assert.ok(sheet(t), t);
+  for (const t of ['Patients', 'Visits', 'Appointments', 'Images', 'Counters', 'ImportLog']) assert.ok(sheet(t), t);
   assert.equal(sheet('Patients').getLastRow(), 1);
 });
 
@@ -54,19 +54,52 @@ test('visits: save, debt, date search, upcoming appointments, delete', () => {
   const p = s.savePatient({ full_name: 'Lê C' });
   const today = s.today_();
   const v1 = s.saveVisit({ patient_id: p, visit_date: '2026-01-05', cost: '800.000', paid: 500000, teeth: '46' });
-  const v2 = s.saveVisit({ patient_id: p, visit_date: today, next_appointment: today, plan: 'Làm sứ' });
+  const v2 = s.saveVisit({ patient_id: p, visit_date: today, plan: 'Làm sứ',
+    appointment: { appt_date: today, start_time: '15:00', duration_min: 60, title: 'Làm sứ' } });
   const g = s.getPatient(p);
   assert.equal(g.visits.length, 2);
   assert.equal(g.visits[0].visit_id, v2); // newest first
   assert.equal(g.total_debt, 300000);
   assert.deepEqual(plain(s.searchVisitsByDate('2026-01-01', '2026-01-31')).map(v => v.visit_id), [v1]);
-  const up = plain(s.getUpcomingAppointments());
+  const up = plain(s.getDashboard().upcoming);
   assert.equal(up.length, 1);
-  assert.equal(up[0].plan, 'Làm sứ');
+  assert.equal(up[0].title, 'Làm sứ');
+  assert.equal(up[0].start_time, '15:00');
+  // editing the visit updates its linked appointment instead of creating another
+  s.saveVisit({ visit_id: v2, visit_date: today, appointment: { appt_date: today, start_time: '16:00', duration_min: 30, title: 'Làm sứ' } });
+  assert.equal(s.listAppointments(today, today).length, 1);
+  assert.equal(s.getVisit(v2).visit.appointment.start_time, '16:00');
+  assert.equal(s.getPatient(p).visits[0].appointment.start_time, '16:00');
   assert.throws(() => s.saveVisit({ patient_id: p, visit_date: '' }), /Ngày khám/);
   assert.throws(() => s.saveVisit({ patient_id: 'NK00-9999', visit_date: today }), /không tồn tại/);
   s.deleteVisit(v1);
   assert.equal(s.getPatient(p).visits.length, 1);
+});
+
+test('appointments: create, list by range, conflicts warn, status, delete, patient view', () => {
+  const { s } = load();
+  const a = s.savePatient({ full_name: 'Hồ Gia Huy', phone: '0901' });
+  const b = s.savePatient({ full_name: 'Ngô Kim Vy' });
+  const today = s.today_();
+  const r1 = s.saveAppointment({ patient_id: a, appt_date: today, start_time: '09:00', duration_min: 60, title: 'Nhổ R38' });
+  assert.equal(r1.conflicts.length, 0);
+  const r2 = s.saveAppointment({ patient_id: b, appt_date: today, start_time: '9:30', duration_min: 30 });
+  assert.deepEqual(plain(r2.conflicts), ['Hồ Gia Huy 09:00']); // warn, still saved
+  s.saveAppointment({ patient_id: b, appt_date: today }); // no time
+  const list = plain(s.listAppointments(today, today));
+  assert.deepEqual(list.map(x => x.start_time), ['', '09:00', '09:30']);
+  assert.equal(list[1].full_name, 'Hồ Gia Huy');
+  assert.throws(() => s.saveAppointment({ patient_id: a, appt_date: today, start_time: '10:00' }), /thời lượng/);
+  assert.throws(() => s.saveAppointment({ patient_id: 'NK00-0000', appt_date: today }), /không tồn tại/);
+  s.saveAppointment({ appt_id: r2.appt_id, patient_id: b, appt_date: today, start_time: '10:00', duration_min: 30 });
+  assert.equal(s.getAppointment(r2.appt_id).appointment.start_time, '10:00');
+  s.setAppointmentStatus(r1.appt_id, 'arrived');
+  assert.equal(s.getAppointment(r1.appt_id).appointment.status, 'arrived');
+  assert.throws(() => s.setAppointmentStatus(r1.appt_id, 'x'), /Trạng thái/);
+  assert.equal(s.getPatient(b).appointments.length, 2);
+  s.deleteAppointment(r2.appt_id);
+  assert.equal(s.listAppointments(today, today).length, 2);
+  assert.equal(s.getDashboard().stats.apptToday, 2);
 });
 
 test('images: lazy folder, same-day folder dedupe, register only files inside the visit folder, delete', () => {
@@ -105,7 +138,7 @@ test('import: preview (dry-run, no writes) → commit in batches → re-run crea
     [2, '', 'Trần B', '', 1970, 'Nữ', '', '', '', '', '', '', '', 0]];
   const lkRows = [['NHẬT KÝ'], hdrLK,
     [1, 'Nguyễn Văn An', new Date(2019, 0, 2), 'Đau', '', '46', '', '', '', 800000, 500000, 300000, '', ''],
-    [1, 'Nguyễn Văn An', new Date(2024, 4, 20), '', '', '', '', '', '', '', '', '', new Date(2024, 4, 27), '']];
+    [1, 'Nguyễn Văn An', new Date(2024, 4, 20), '', '', '', '', 'Làm sứ', '', '', '', '', new Date(2024, 4, 27), '']];
   const { s, gas, sheet } = load({ importFixture: () => [['BenhNhan', bnRows.map(r => r.slice())], ['LanKham', lkRows.map(r => r.slice())]] });
 
   const pv = s.importPreview('x.xlsx', Buffer.from('xlsx').toString('base64'));
@@ -122,6 +155,9 @@ test('import: preview (dry-run, no writes) → commit in batches → re-run crea
   assert.equal(an.phone, '0903123456');
   assert.equal(plain(s.searchPatients('tran b'))[0].patient_id, `NK${yy}-0001`); // no visits → current year
   assert.equal(s.getPatient(an.patient_id).visits.length, 2);
+  const imported = plain(s.listAppointments('2024-01-01', '2024-12-31'));
+  assert.equal(imported.length, 1);
+  assert.deepEqual([imported[0].appt_date, imported[0].start_time, imported[0].title, imported[0].status], ['2024-05-27', '', 'Làm sứ', 'arrived']);
 
   const pv2 = s.importPreview('x.xlsx', Buffer.from('xlsx').toString('base64'));
   assert.equal(pv2.newPatients, 0);

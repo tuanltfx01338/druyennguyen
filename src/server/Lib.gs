@@ -7,21 +7,25 @@ var TABLES = {
     'allergies', 'systemic_diseases', 'current_meds', 'notes', 'folder_id', 'import_stt', 'import_folder_name',
     'created_at', 'updated_at', 'deleted'],
   Visits: ['visit_id', 'patient_id', 'visit_date', 'reason', 'diagnosis', 'teeth', 'treatment', 'plan',
-    'prescription', 'cost', 'paid', 'next_appointment', 'notes', 'folder_id', 'source',
+    'prescription', 'cost', 'paid', 'notes', 'folder_id', 'source',
+    'created_at', 'updated_at', 'deleted'],
+  Appointments: ['appt_id', 'patient_id', 'appt_date', 'start_time', 'duration_min', 'title', 'notes', 'status', 'visit_id',
     'created_at', 'updated_at', 'deleted'],
   Images: ['image_id', 'visit_id', 'patient_id', 'file_name', 'mime', 'size_bytes', 'label', 'created_at', 'deleted'],
   Counters: ['year', 'last_seq'],
   ImportLog: ['run_id', 'at', 'sheet', 'row', 'status', 'message']
 };
-var DATE_COLS = { Patients: ['dob'], Visits: ['visit_date', 'next_appointment'] };
+var DATE_COLS = { Patients: ['dob'], Visits: ['visit_date'], Appointments: ['appt_date'] };
 var NUMBER_COLS = {
-  Patients: ['birth_year', 'import_stt'], Visits: ['cost', 'paid'], Images: ['size_bytes'],
+  Patients: ['birth_year', 'import_stt'], Visits: ['cost', 'paid'], Images: ['size_bytes'], Appointments: ['duration_min'],
   Counters: ['year', 'last_seq'], ImportLog: ['row']
 };
 var IMAGE_LABELS = ['truoc', 'sau', 'xquang', 'khac'];
 var GENDERS = ['Nam', 'Nữ'];
 var MAX_TEXT = 4000;
 var IMPORT_VISIT_REASON = 'Dữ liệu cũ';
+/** scheduled = đã hẹn · arrived = đã đến · no_show = không đến · cancelled = huỷ */
+var APPT_STATUSES = ['scheduled', 'arrived', 'no_show', 'cancelled'];
 
 function stripAccents(s) {
   return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -231,25 +235,71 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
-/** Latest visit per patient whose next_appointment is within [from, to]. */
-function upcomingAppointments(patientsById, visits, from, to) {
-  var byPatient = {};
-  visits.forEach(function (v) {
-    if (!patientsById[v.patient_id] || !v.next_appointment || v.next_appointment < from || v.next_appointment > to) return;
-    var cur = byPatient[v.patient_id];
-    if (!cur || v.visit_date > cur.visit_date) byPatient[v.patient_id] = v;
+/** 'HH:mm' (24h) or '' (chưa đặt giờ). */
+function isValidTime(t) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t));
+}
+
+function timeToMin(t) {
+  var p = String(t).split(':').map(Number);
+  return p[0] * 60 + p[1];
+}
+
+/** Excel/Sheets may hand back a time as Date or number of days; normalize to 'HH:mm' or ''. */
+function normalizeTime(v) {
+  if (v == null || v === '') return '';
+  var s = String(v).trim().replace(/[hH.]/, ':');
+  var m = s.match(/^(\d{1,2}):(\d{2})$/) || s.match(/^(\d{1,2})$/);
+  if (!m) return null;
+  var t = String(m[1]).padStart(2, '0') + ':' + (m[2] || '00');
+  return isValidTime(t) ? t : null;
+}
+
+function validateAppointment(d) {
+  var e = [];
+  var v = {
+    patient_id: String(d.patient_id || '').trim(),
+    title: text_(d, 'title', e, 'Nội dung'),
+    notes: text_(d, 'notes', e, 'Ghi chú'),
+    status: d.status ? String(d.status) : 'scheduled'
+  };
+  if (!v.patient_id) e.push('Chưa chọn bệnh nhân');
+  v.appt_date = parseDateLoose(d.appt_date);
+  if (!v.appt_date) e.push('Ngày hẹn thiếu hoặc không hợp lệ');
+  v.start_time = normalizeTime(d.start_time);
+  if (v.start_time === null) e.push('Giờ hẹn không hợp lệ (HH:mm)');
+  var dur = d.duration_min == null || d.duration_min === '' ? '' : Number(d.duration_min);
+  if (dur !== '' && !(Number.isInteger(dur) && dur >= 5 && dur <= 720)) e.push('Thời lượng phải từ 5 đến 720 phút');
+  if (v.start_time && dur === '') e.push('Chưa nhập thời lượng dự kiến');
+  v.duration_min = dur;
+  if (APPT_STATUSES.indexOf(v.status) < 0) e.push('Trạng thái không hợp lệ');
+  return { errors: e, value: v };
+}
+
+/** Timed, non-cancelled appointments on the same day whose time ranges overlap `a`. */
+function findConflicts(appts, a) {
+  if (!a.start_time || !a.duration_min) return [];
+  var s = timeToMin(a.start_time), e = s + Number(a.duration_min);
+  return appts.filter(function (b) {
+    if (b.appt_id === a.appt_id || b.appt_date !== a.appt_date || !b.start_time || !b.duration_min || b.status === 'cancelled') return false;
+    var bs = timeToMin(b.start_time), be = bs + Number(b.duration_min);
+    return bs < e && s < be;
   });
-  return Object.keys(byPatient).map(function (pid) {
-    var v = byPatient[pid], p = patientsById[pid];
-    return { patient_id: pid, full_name: p.full_name, phone: p.phone, next_appointment: v.next_appointment, plan: v.plan };
-  }).sort(function (a, b) { return a.next_appointment.localeCompare(b.next_appointment) || a.full_name.localeCompare(b.full_name); });
+}
+
+function sortAppointments(list) {
+  return list.sort(function (a, b) {
+    return String(a.appt_date).localeCompare(String(b.appt_date))
+      || (a.start_time ? 1 : 0) - (b.start_time ? 1 : 0) // untimed first within a day (all-day row)
+      || String(a.start_time).localeCompare(String(b.start_time));
+  });
 }
 
 /**
- * Dashboard numbers from active patients/visits. "import-images" visits are containers for old photos,
- * not real consultations → excluded from visit counts.
+ * Dashboard numbers from active patients/visits/appointments. "import-images" visits are containers
+ * for old photos, not real consultations → excluded from visit counts.
  */
-function buildDashboard(patients, visits, today) {
+function buildDashboard(patients, visits, today, appointments) {
   var byId = {};
   patients.forEach(function (p) { byId[p.patient_id] = p; });
   visits = visits.filter(function (v) { return byId[v.patient_id]; });
@@ -268,13 +318,19 @@ function buildDashboard(patients, visits, today) {
   var debtors = Object.keys(debtBy).filter(function (k) { return debtBy[k] > 0; }).map(function (k) {
     return { patient_id: k, full_name: byId[k].full_name, phone: byId[k].phone, debt: debtBy[k] };
   }).sort(function (a, b) { return b.debt - a.debt; });
-  var upcoming = upcomingAppointments(byId, visits, today, addDays(today, 7));
+  var to = addDays(today, 7);
+  var upcoming = sortAppointments((appointments || []).filter(function (a) {
+    return byId[a.patient_id] && a.status !== 'cancelled' && a.appt_date >= today && a.appt_date <= to;
+  })).map(function (a) {
+    return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: byId[a.patient_id].full_name, phone: byId[a.patient_id].phone,
+      appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title, status: a.status };
+  });
   var cur = monthly[monthly.length - 1];
   return {
     today: today,
     stats: {
       patients: patients.length, visitsToday: todayVisits.length, visitsMonth: cur.visits, paidMonth: cur.paid,
-      apptToday: upcoming.filter(function (a) { return a.next_appointment === today; }).length, appt7: upcoming.length,
+      apptToday: upcoming.filter(function (a) { return a.appt_date === today; }).length, appt7: upcoming.length,
       totalDebt: debtors.reduce(function (s, d) { return s + d.debt; }, 0), debtorCount: debtors.length
     },
     monthly: monthly, todayVisits: todayVisits, upcoming: upcoming, debtors: debtors.slice(0, 10)

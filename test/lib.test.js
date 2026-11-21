@@ -105,23 +105,59 @@ test('lastMonths / addDays', () => {
   assert.equal(L.addDays('2026-12-30', 3), '2027-01-02');
 });
 
+test('appointments: time, validation, conflicts, ordering', () => {
+  assert.equal(L.normalizeTime('8:30'), '08:30');
+  assert.equal(L.normalizeTime('14h15'), '14:15');
+  assert.equal(L.normalizeTime('9'), '09:00');
+  assert.equal(L.normalizeTime(''), '');
+  assert.equal(L.normalizeTime('25:00'), null);
+  const ok = L.validateAppointment({ patient_id: 'A', appt_date: '2026-11-21', start_time: '9:00', duration_min: 45, title: 'Lắp sứ' });
+  assert.equal(ok.errors.length, 0);
+  assert.equal(ok.value.start_time, '09:00');
+  assert.equal(ok.value.status, 'scheduled');
+  assert.equal(L.validateAppointment({ patient_id: 'A', appt_date: '2026-11-21' }).errors.length, 0); // no time = all-day
+  const bad = L.validateAppointment({ appt_date: 'x', start_time: '10:00', duration_min: '', status: 'zzz' }).errors;
+  assert.deepEqual([...bad], ['Chưa chọn bệnh nhân', 'Ngày hẹn thiếu hoặc không hợp lệ', 'Chưa nhập thời lượng dự kiến', 'Trạng thái không hợp lệ']);
+  assert.ok(L.validateAppointment({ patient_id: 'A', appt_date: '2026-11-21', start_time: '10:00', duration_min: 3 }).errors.length === 1);
+
+  const list = [
+    { appt_id: 1, appt_date: '2026-11-21', start_time: '09:00', duration_min: 60, status: 'scheduled' },
+    { appt_id: 2, appt_date: '2026-11-21', start_time: '10:00', duration_min: 30, status: 'scheduled' },
+    { appt_id: 3, appt_date: '2026-11-21', start_time: '09:30', duration_min: 30, status: 'cancelled' },
+    { appt_id: 4, appt_date: '2026-11-21', start_time: '', duration_min: '', status: 'scheduled' },
+    { appt_id: 5, appt_date: '2026-11-22', start_time: '09:15', duration_min: 30, status: 'scheduled' },
+  ];
+  const c = L.findConflicts(list, { appt_id: 9, appt_date: '2026-11-21', start_time: '09:45', duration_min: 30 });
+  assert.deepEqual(c.map(x => x.appt_id), [1, 2]); // 09:45–10:15 overlaps 1 and 2; cancelled/untimed/other day ignored
+  assert.equal(L.findConflicts(list, { appt_id: 9, appt_date: '2026-11-21', start_time: '10:30', duration_min: 15 }).length, 0);
+  assert.deepEqual(L.sortAppointments(list.slice().reverse()).map(x => x.appt_id), [4, 1, 3, 2, 5]);
+});
+
 test('buildDashboard', () => {
   const P = [{ patient_id: 'A', full_name: 'An', phone: '1' }, { patient_id: 'B', full_name: 'Bình', phone: '2' }];
   const V = [
-    { visit_id: 1, patient_id: 'A', visit_date: '2026-11-21', cost: 1000, paid: 400, reason: 'Đau', next_appointment: '2026-11-21', source: 'app' },
-    { visit_id: 2, patient_id: 'A', visit_date: '2026-10-01', cost: 500, paid: 500, next_appointment: '2026-11-25', source: 'app' },
-    { visit_id: 3, patient_id: 'B', visit_date: '2026-06-02', cost: 300, paid: 0, next_appointment: '2026-11-28', source: 'import' },
+    { visit_id: 1, patient_id: 'A', visit_date: '2026-11-21', cost: 1000, paid: 400, reason: 'Đau', source: 'app' },
+    { visit_id: 2, patient_id: 'A', visit_date: '2026-10-01', cost: 500, paid: 500, source: 'app' },
+    { visit_id: 3, patient_id: 'B', visit_date: '2026-06-02', cost: 300, paid: 0, source: 'import' },
     { visit_id: 4, patient_id: 'B', visit_date: '2026-11-21', source: 'import-images' }, // photo container, not a visit
     { visit_id: 5, patient_id: 'GONE', visit_date: '2026-11-21', cost: 9, paid: 0 },      // deleted patient
     { visit_id: 6, patient_id: 'B', visit_date: '2025-01-01', cost: 100, paid: 0 },       // outside 6 months, still debt
   ];
-  const d = JSON.parse(JSON.stringify(L.buildDashboard(P, V, '2026-11-21')));
+  const A = [
+    { appt_id: 'x1', patient_id: 'A', appt_date: '2026-11-21', start_time: '14:00', duration_min: 30, title: 'Lắp sứ', status: 'scheduled' },
+    { appt_id: 'x2', patient_id: 'A', appt_date: '2026-11-21', start_time: '08:00', duration_min: 30, status: 'arrived' },
+    { appt_id: 'x3', patient_id: 'B', appt_date: '2026-11-28', start_time: '', status: 'scheduled' },
+    { appt_id: 'x4', patient_id: 'B', appt_date: '2026-11-22', start_time: '09:00', duration_min: 30, status: 'cancelled' },
+    { appt_id: 'x5', patient_id: 'B', appt_date: '2026-11-29', start_time: '09:00', duration_min: 30, status: 'scheduled' }, // > 7 days
+    { appt_id: 'x6', patient_id: 'GONE', appt_date: '2026-11-21', start_time: '09:00', duration_min: 30, status: 'scheduled' },
+  ];
+  const d = JSON.parse(JSON.stringify(L.buildDashboard(P, V, '2026-11-21', A)));
   assert.deepEqual(d.monthly.map(m => m.month), ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11']);
   assert.deepEqual(d.monthly.map(m => m.visits), [1, 0, 0, 0, 1, 1]);
   assert.equal(d.monthly[5].paid, 400);
-  assert.deepEqual(d.stats, { patients: 2, visitsToday: 1, visitsMonth: 1, paidMonth: 400, apptToday: 1, appt7: 2, totalDebt: 1000, debtorCount: 2 });
-  assert.deepEqual(d.upcoming.map(u => u.patient_id), ['A', 'B']); // A: latest visit's appointment (today), B within 7 days
-  assert.equal(d.upcoming[0].next_appointment, '2026-11-21');
+  assert.deepEqual(d.stats, { patients: 2, visitsToday: 1, visitsMonth: 1, paidMonth: 400, apptToday: 2, appt7: 3, totalDebt: 1000, debtorCount: 2 });
+  assert.deepEqual(d.upcoming.map(u => u.appt_id), ['x2', 'x1', 'x3']);
+  assert.equal(d.upcoming[1].full_name, 'An');
   assert.deepEqual(d.debtors.map(x => [x.patient_id, x.debt]), [['A', 600], ['B', 400]]);
   assert.deepEqual(d.todayVisits.map(x => x.visit_id), [1]);
 });

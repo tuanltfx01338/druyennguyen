@@ -3,36 +3,49 @@ function getVisit(id) {
     var v = mustFindActive_('Visits', 'visit_id', id, 'Lần khám');
     var p = mustFindActive_('Patients', 'patient_id', v.patient_id, 'Bệnh nhân');
     v.images = readActive_('Images').filter(function (i) { return i.visit_id === id; }).map(publicImage_);
+    v.appointment = linkedAppointment_(id);
     delete v._row;
     return { visit: v, patient: { patient_id: p.patient_id, full_name: p.full_name, allergies: p.allergies } };
   });
 }
 
+/**
+ * data.appointment (optional): {appt_date, start_time, duration_min, title} — the follow-up appointment
+ * booked during this visit; creates it or updates the one already linked to the visit.
+ */
 function saveVisit(data) {
   return api_('saveVisit', function () {
     data = data || {};
     var res = validateVisit(data);
     if (res.errors.length) throw new Error(res.errors.join('; '));
     var v = res.value;
+    delete v.next_appointment; // replaced by the Appointments table
+    var ap = data.appointment && data.appointment.appt_date ? data.appointment : null;
     return withLock_(function () {
+      var visit;
       if (data.visit_id) {
-        var old = mustFindActive_('Visits', 'visit_id', data.visit_id, 'Lần khám');
-        Object.keys(v).forEach(function (k) { old[k] = v[k]; });
-        old.updated_at = now_();
-        updateRow_('Visits', old);
-        touchPatient_(old.patient_id);
-        return old.visit_id;
+        visit = mustFindActive_('Visits', 'visit_id', data.visit_id, 'Lần khám');
+        Object.keys(v).forEach(function (k) { visit[k] = v[k]; });
+        visit.updated_at = now_();
+        updateRow_('Visits', visit);
+      } else {
+        mustFindActive_('Patients', 'patient_id', data.patient_id, 'Bệnh nhân');
+        visit = v;
+        v.visit_id = Utilities.getUuid();
+        v.patient_id = data.patient_id;
+        v.source = 'app';
+        v.folder_id = ''; // created lazily on first image upload
+        v.created_at = v.updated_at = now_();
+        v.deleted = false;
+        appendRows_('Visits', [v]);
       }
-      mustFindActive_('Patients', 'patient_id', data.patient_id, 'Bệnh nhân');
-      v.visit_id = Utilities.getUuid();
-      v.patient_id = data.patient_id;
-      v.source = 'app';
-      v.folder_id = ''; // created lazily on first image upload
-      v.created_at = v.updated_at = now_();
-      v.deleted = false;
-      appendRows_('Visits', [v]);
-      touchPatient_(v.patient_id);
-      return v.visit_id;
+      if (ap) {
+        var linked = linkedAppointment_(visit.visit_id);
+        upsertAppointment_(Object.assign({}, linked || {}, ap, { patient_id: visit.patient_id, visit_id: visit.visit_id,
+          appt_id: linked ? linked.appt_id : '', status: linked ? linked.status : 'scheduled' }));
+      }
+      touchPatient_(visit.patient_id);
+      return visit.visit_id;
     });
   });
 }
@@ -69,18 +82,9 @@ function searchVisitsByDate(from, to) {
   });
 }
 
-/** Appointments from today to today+7, one (latest) per patient. */
-function getUpcomingAppointments() {
-  return api_('getUpcomingAppointments', function () {
-    var byId = {};
-    readActive_('Patients').forEach(function (p) { byId[p.patient_id] = p; });
-    return upcomingAppointments(byId, readActive_('Visits'), today_(), addDays(today_(), 7));
-  });
-}
-
 /** Landing page: today's work, appointments, 6-month trend, debts. */
 function getDashboard() {
   return api_('getDashboard', function () {
-    return buildDashboard(readActive_('Patients'), readActive_('Visits'), today_());
+    return buildDashboard(readActive_('Patients'), readActive_('Visits'), today_(), readActive_('Appointments'));
   });
 }

@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const read = p => fs.readFileSync(path.join(root, p), 'utf8');
-const SERVER_FILES = ['Lib', 'Repo', 'Main', 'Patients', 'Visits', 'Images', 'Import', 'Backup'];
+const SERVER_FILES = ['Lib', 'Repo', 'Main', 'Patients', 'Visits', 'Appointments', 'Images', 'Import', 'Backup'];
 const server = SERVER_FILES.map(f => read(`src/server/${f}.gs`)).join('\n');
 const publicFns = [...server.matchAll(/^function ([A-Za-z]\w*)\s*\(/gm)].map(m => m[1]).filter(n => !n.endsWith('_'));
 const GLOBALS = ['SpreadsheetApp', 'DriveApp', 'Drive', 'Utilities', 'MimeType', 'PropertiesService', 'LockService',
@@ -29,7 +29,7 @@ ${client('Styles')}
 </head>
 <body>
 <div class="demo-banner">BẢN XEM THỬ · dữ liệu giả, chỉ nằm trong trang (tải lại = về ban đầu)<button onclick="demoBack()">↩ Quay lại</button></div>
-<header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án</a><nav><a href="#" id="nav-dash">Tổng quan</a><a href="#" id="nav-patients">Bệnh nhân</a></nav></header>
+<header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án</a><nav><a href="#" data-path="">Tổng quan</a><a href="#" data-path="calendar">Lịch hẹn</a><a href="#" data-path="patients">Bệnh nhân</a></nav></header>
 <main id="app"></main>
 <div id="toast" role="status"></div>
 <script>
@@ -49,6 +49,7 @@ ${noClose(read('tools/demo-seed.js'))}
 </script>
 ${client('App.js')}
 ${client('Upload.js')}
+${client('Calendar.js')}
 ${client('Import.js')}
 <script>start();</script>
 </body>

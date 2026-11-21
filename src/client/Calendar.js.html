@@ -1,0 +1,267 @@
+<script>
+'use strict';
+/* Lịch hẹn kiểu Outlook: Ngày / Tuần (lưới giờ) · Tháng (ô ngày). */
+const APPT_STATUS = {
+  scheduled: { label: 'Đã hẹn', icon: '🕒' },
+  arrived: { label: 'Đã đến', icon: '✓' },
+  no_show: { label: 'Không đến', icon: '✗' },
+  cancelled: { label: 'Đã huỷ', icon: '⊘' },
+};
+const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const WD_LONG = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
+const HOUR_PX = 48;              // 30-minute row = 24px
+const PX_PER_MIN = HOUR_PX / 60;
+const DURATIONS = [15, 30, 45, 60, 90, 120];
+
+const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const toStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const shiftDays = (s, n) => { const d = toDate(s); d.setDate(d.getDate() + n); return toStr(d); };
+const mondayOf = s => { const d = toDate(s); return shiftDays(s, -((d.getDay() + 6) % 7)); };
+const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const minToTime = m => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
+const endTimeOf = a => a.start_time && a.duration_min ? minToTime(toMin(a.start_time) + Number(a.duration_min)) : '';
+const fmtDayLong = s => { const d = toDate(s); return `${WD_LONG[d.getDay()]}, ${fmtDate(s)}`; };
+// Vietnamese given name = last word ("Nguyễn Văn An" → "An"): fits narrow week/month cells.
+const shortName = n => String(n).trim().split(/\s+/).slice(-2).join(' ');
+const apptTimeText = a => a.start_time ? `${a.start_time}–${endTimeOf(a)} (${a.duration_min}')` : 'Chưa đặt giờ';
+
+const calState = { view: window.innerWidth < 600 ? 'day' : 'week', date: todayStr() };
+let pendingAppt = null; // prefill for the appointment form
+
+function openCalendar(view, date) { if (view) calState.view = view; if (date) calState.date = date; go('calendar'); }
+function newAppointment(prefill) { pendingAppt = prefill || {}; go('a/new'); }
+
+/** Side-by-side columns for overlapping events (Outlook-style). Returns [{a, col, cols}]. */
+function layoutDay(events) {
+  const timed = events.filter(a => a.start_time).map(a => ({ a, s: toMin(a.start_time), e: toMin(a.start_time) + Math.max(Number(a.duration_min) || 15, 15) }))
+    .sort((x, y) => x.s - y.s || y.e - x.e);
+  const out = [];
+  let cluster = [], colsEnd = [], clusterEnd = -1;
+  const flush = () => { cluster.forEach(c => { c.cols = colsEnd.length; out.push(c); }); cluster = []; colsEnd = []; };
+  for (const ev of timed) {
+    if (ev.s >= clusterEnd) { flush(); clusterEnd = -1; }
+    let col = colsEnd.findIndex(end => end <= ev.s);
+    if (col < 0) { col = colsEnd.length; colsEnd.push(ev.e); } else colsEnd[col] = ev.e;
+    ev.col = col; cluster.push(ev); clusterEnd = Math.max(clusterEnd, ev.e);
+  }
+  flush();
+  return out;
+}
+
+async function pageCalendar() {
+  const { view } = calState;
+  const today = todayStr();
+  let from, to, title;
+  if (view === 'day') { from = to = calState.date; title = fmtDayLong(calState.date); }
+  else if (view === 'week') { from = mondayOf(calState.date); to = shiftDays(from, 6); title = `${fmtDate(from).slice(0, 5)} – ${fmtDate(to)}`; }
+  else {
+    const d = toDate(calState.date);
+    from = mondayOf(toStr(new Date(d.getFullYear(), d.getMonth(), 1)));
+    to = shiftDays(from, 41);
+    title = `Tháng ${d.getMonth() + 1}/${d.getFullYear()}`;
+  }
+  const step = n => {
+    if (view === 'day') calState.date = shiftDays(calState.date, n);
+    else if (view === 'week') calState.date = shiftDays(calState.date, 7 * n);
+    else { const d = toDate(calState.date); calState.date = toStr(new Date(d.getFullYear(), d.getMonth() + n, 1)); }
+    pageCalendar();
+  };
+  const seg = h('div', { class: 'seg' }, [['day', 'Ngày'], ['week', 'Tuần'], ['month', 'Tháng']].map(([k, l]) =>
+    h('button', { class: k === view ? 'active' : '', onclick: () => { calState.view = k; pageCalendar(); } }, l)));
+  const body = h('div', { class: 'cal-body' }, h('div', { class: 'loading' }, 'Đang tải lịch…'));
+  let touchX = null;
+  mount(
+    h('div', { class: 'cal-toolbar' },
+      h('div', { class: 'cal-nav' },
+        h('button', { onclick: () => step(-1), 'aria-label': 'Trước' }, '‹'),
+        h('button', { onclick: () => { calState.date = today; pageCalendar(); } }, 'Hôm nay'),
+        h('button', { onclick: () => step(1), 'aria-label': 'Sau' }, '›'),
+        h('b', { class: 'cal-title' }, title)),
+      h('div', { class: 'cal-nav' }, seg,
+        h('button', { class: 'primary', onclick: () => newAppointment({ appt_date: view === 'day' ? calState.date : '' }) }, '+ Lịch hẹn'))),
+    h('div', { ontouchstart: e => { touchX = e.touches[0].clientX; },
+      ontouchend: e => { if (touchX == null) return; const dx = e.changedTouches[0].clientX - touchX; touchX = null; if (Math.abs(dx) > 70) step(dx > 0 ? -1 : 1); } }, body));
+
+  let appts;
+  try { appts = await api('listAppointments', from, to); } catch (e) { return body.replaceChildren(errBox(e, pageCalendar)); }
+  if (view === 'month') body.replaceChildren(monthView(from, appts, today));
+  else {
+    const days = view === 'day' ? [from] : Array.from({ length: 7 }, (_, i) => shiftDays(from, i));
+    body.replaceChildren(...timeGrid(days, appts, today));
+    const scroller = body.querySelector('.tg-scroll');
+    const first = appts.filter(a => a.start_time).map(a => toMin(a.start_time)).sort((x, y) => x - y)[0];
+    const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+    const target = first != null ? first : (days.includes(today) ? nowMin : 8 * 60);
+    scroller.scrollTop = Math.max(0, (Math.min(target, 8 * 60) - 30) * PX_PER_MIN);
+  }
+}
+
+function apptClass(a) { return 'ev st-' + (a.status || 'scheduled'); }
+
+function timeGrid(days, appts, today) {
+  const multi = days.length > 1;
+  const head = h('div', { class: 'tg-head' }, h('div', { class: 'tg-gutter' }),
+    days.map(d => { const dt = toDate(d); return h('button', { class: 'tg-day' + (d === today ? ' today' : ''), onclick: () => openCalendar('day', d) },
+      h('span', {}, WD[dt.getDay()]), h('b', {}, dt.getDate())); }));
+  const allDay = h('div', { class: 'tg-allday' }, h('div', { class: 'tg-gutter' }, 'Cả ngày'),
+    days.map(d => h('div', { class: 'tg-allday-col' }, appts.filter(a => a.appt_date === d && !a.start_time).map(a =>
+      h('button', { class: apptClass(a) + ' chip-ev', onclick: () => apptSheet(a) }, multi ? shortName(a.full_name) : a.full_name + (a.title ? ' · ' + a.title : ''))))));
+  const hours = Array.from({ length: 24 }, (_, i) => h('div', { class: 'tg-hour', style: `height:${HOUR_PX}px` }, h('span', {}, i ? pad(i) + ':00' : '')));
+  const cols = days.map(d => {
+    const col = h('div', { class: 'tg-col' + (d === today ? ' today' : ''), style: `height:${24 * HOUR_PX}px`,
+      onclick: e => {
+        if (e.target !== col) return;
+        const min = Math.floor(e.offsetY / PX_PER_MIN / 30) * 30;
+        newAppointment({ appt_date: d, start_time: minToTime(min) });
+      } });
+    layoutDay(appts.filter(a => a.appt_date === d)).forEach(({ a, s, e, col: c, cols: n }) => {
+      const height = Math.max((e - s) * PX_PER_MIN - 2, 18);
+      col.append(h('button', { class: apptClass(a) + (multi && n >= 3 ? ' narrow' : ''), title: `${a.start_time} ${a.full_name}`,
+        style: `top:${s * PX_PER_MIN + 1}px;height:${height}px;left:calc(${(c / n) * 100}% + 1px);width:calc(${100 / n}% - 3px)`,
+        onclick: ev => { ev.stopPropagation(); apptSheet(a); } },
+        h('div', { class: 'ev-t' }, a.start_time + (multi ? '' : '–' + endTimeOf(a))),
+        h('div', { class: 'ev-n' }, (a.status !== 'scheduled' ? APPT_STATUS[a.status].icon + ' ' : '') + (multi ? shortName(a.full_name) : a.full_name)),
+        a.title && height > 40 ? h('div', { class: 'ev-d' }, a.title) : null));
+    });
+    if (d === today) {
+      const now = new Date();
+      col.append(h('div', { class: 'now-line', style: `top:${(now.getHours() * 60 + now.getMinutes()) * PX_PER_MIN}px` }));
+    }
+    return col;
+  });
+  const grid = h('div', { class: 'tg-scroll' }, h('div', { class: 'tg-grid' }, h('div', { class: 'tg-gutter' }, hours), cols));
+  return [h('div', { class: 'tg card' + (multi ? ' week' : ''), style: 'padding:0' }, head, allDay, grid),
+    h('div', { class: 'muted', style: 'margin:6px 2px' }, 'Chạm vào ô giờ trống để tạo lịch hẹn · vuốt trái/phải để đổi ' + (multi ? 'tuần' : 'ngày'))];
+}
+
+function monthView(from, appts, today) {
+  const month = toDate(calState.date).getMonth();
+  const cells = Array.from({ length: 42 }, (_, i) => {
+    const d = shiftDays(from, i);
+    const dt = toDate(d);
+    const list = appts.filter(a => a.appt_date === d && a.status !== 'cancelled');
+    return h('div', { class: 'mv-cell' + (dt.getMonth() !== month ? ' other' : '') + (d === today ? ' today' : ''), onclick: () => openCalendar('day', d) },
+      h('div', { class: 'mv-date' }, dt.getDate()),
+      list.slice(0, 3).map(a => h('button', { class: apptClass(a) + ' mv-ev', onclick: e => { e.stopPropagation(); apptSheet(a); } },
+        (a.start_time ? a.start_time + ' ' : '• ') + shortName(a.full_name))),
+      list.length > 3 ? h('div', { class: 'mv-more' }, `+${list.length - 3} nữa`) : null);
+  });
+  return h('div', { class: 'card', style: 'padding:0' },
+    h('div', { class: 'mv-head' }, ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map(w => h('div', {}, w))),
+    h('div', { class: 'mv-grid' }, cells));
+}
+
+/** Bottom sheet with appointment details and quick actions. */
+function apptSheet(a) {
+  const close = () => wrap.remove();
+  const setStatus = async st => {
+    try { await api('setAppointmentStatus', a.appt_id, st); toast(APPT_STATUS[st].label); close(); render(currentPath()); }
+    catch (e) { toast(errMsg(e), 'error'); }
+  };
+  const st = APPT_STATUS[a.status] || APPT_STATUS.scheduled;
+  const wrap = h('div', { class: 'sheet-wrap', onclick: e => { if (e.target === wrap) close(); } },
+    h('div', { class: 'sheet' },
+      h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, a.full_name), h('button', { onclick: close }, '✕')),
+      a.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + a.allergies) : null,
+      kv([['Ngày', fmtDayLong(a.appt_date)], ['Giờ', apptTimeText(a)], ['Nội dung', a.title], ['Ghi chú', a.notes],
+        ['SĐT', a.phone], ['Trạng thái', st.icon + ' ' + st.label]]),
+      h('div', { class: 'row-actions' },
+        a.status !== 'arrived' ? h('button', { class: 'primary', onclick: () => setStatus('arrived') }, '✓ Đã đến') : null,
+        a.status !== 'no_show' ? h('button', { onclick: () => setStatus('no_show') }, '✗ Không đến') : null,
+        a.status !== 'cancelled' ? h('button', { onclick: () => setStatus('cancelled') }, '⊘ Huỷ hẹn') : h('button', { onclick: () => setStatus('scheduled') }, 'Khôi phục')),
+      h('div', { class: 'row-actions', style: 'margin:0' },
+        h('button', { onclick: () => { close(); go('a/' + a.appt_id); } }, 'Sửa'),
+        h('button', { onclick: () => { close(); go('p/' + a.patient_id); } }, 'Hồ sơ'),
+        h('button', { onclick: () => { close(); go('p/' + a.patient_id + '/v/new'); } }, '+ Lần khám'))));
+  document.body.append(wrap);
+}
+
+/** Duration chips + free number input (bác sĩ tự ước lượng). */
+function durationPicker(value, onChange) {
+  const input = h('input', { type: 'number', min: 5, max: 720, step: 5, inputmode: 'numeric', value: value || '', style: 'width:90px',
+    oninput: () => { sync(); onChange(input.value); } });
+  const chips = DURATIONS.map(m => h('button', { type: 'button', class: 'chip', onclick: () => { input.value = m; sync(); onChange(String(m)); } }, m + "'"));
+  const sync = () => chips.forEach((c, i) => c.classList.toggle('active', String(DURATIONS[i]) === String(input.value)));
+  sync();
+  return { el: h('div', { class: 'chips', style: 'align-items:center;margin:0' }, chips, input, h('span', { class: 'muted' }, 'phút')), input };
+}
+
+function patientPicker(initial, onPick) {
+  const box = h('div');
+  const showSelected = p => box.replaceChildren(h('div', { class: 'picked' },
+    h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id), p.phone ? h('div', { class: 'muted' }, p.phone) : null),
+    h('button', { type: 'button', onclick: () => { onPick(null); showSearch(); } }, 'Đổi')),
+    ...(p.allergies ? [h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies)] : []));
+  const showSearch = () => {
+    const q = h('input', { type: 'search', placeholder: 'Gõ tên, mã hoặc SĐT bệnh nhân…', autocomplete: 'off' });
+    const res = h('div', { class: 'list' });
+    let t;
+    q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => {
+      if (!q.value.trim()) return res.replaceChildren();
+      try {
+        const list = await api('searchPatients', q.value);
+        res.replaceChildren(...(list.length ? list.slice(0, 8).map(p => h('a', { href: '#', class: 'item', onclick: e => { e.preventDefault(); onPick(p); showSelected(p); } },
+          h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id), h('div', { class: 'muted' }, p.phone || ''))) : [h('div', { class: 'muted' }, 'Không tìm thấy — tạo bệnh nhân mới trước')]));
+      } catch (e) { res.replaceChildren(errBox(e)); }
+    }, 250); });
+    box.replaceChildren(q, res);
+    q.focus();
+  };
+  if (initial) showSelected(initial); else showSearch();
+  return box;
+}
+
+async function pageAppointmentForm(id) {
+  let a = Object.assign({ appt_date: calState.date, start_time: '', duration_min: '', title: '', notes: '', status: 'scheduled' }, id ? {} : (pendingAppt || {}));
+  pendingAppt = null;
+  let patient = null;
+  if (id || a.patient_id) {
+    loading();
+    try {
+      if (id) { const r = await api('getAppointment', id); a = r.appointment; patient = r.patient; }
+      else patient = (await api('getPatient', a.patient_id)).patient;
+    } catch (e) { return mount(errBox(e, () => pageAppointmentForm(id))); }
+  }
+  if (!a.appt_date) a.appt_date = todayStr();
+  let patientId = patient ? patient.patient_id : '';
+  const picker = patientPicker(patient, p => { patientId = p ? p.patient_id : ''; dirty = true; });
+  const date = h('input', { type: 'date', value: a.appt_date, oninput: () => { dirty = true; } });
+  const time = h('input', { type: 'time', value: a.start_time || '', step: 300, oninput: () => { dirty = true; updEnd(); } });
+  const endInfo = h('span', { class: 'muted' });
+  let duration = a.duration_min === '' || a.duration_min == null ? '' : String(a.duration_min);
+  const dur = durationPicker(duration, v => { duration = v; dirty = true; updEnd(); });
+  const updEnd = () => { endInfo.textContent = time.value && duration ? 'Kết thúc ' + minToTime(toMin(time.value) + Number(duration)) : (time.value ? '' : 'Để trống giờ nếu chưa chốt — hẹn hiện ở dòng "Cả ngày"'); };
+  updEnd();
+  const title = h('input', { value: a.title || '', placeholder: 'VD: Lắp mão sứ R46', oninput: () => { dirty = true; } });
+  const notes = h('textarea', { value: a.notes || '', oninput: () => { dirty = true; } });
+  const status = h('select', { onchange: () => { dirty = true; } }, Object.entries(APPT_STATUS).map(([k, s]) => h('option', { value: k, selected: k === a.status }, s.icon + ' ' + s.label)));
+  const field = (label, el, full) => h('div', { class: full ? 'full' : '' }, h('label', {}, label), el);
+  const back = () => { calState.date = date.value || calState.date; go('calendar'); };
+  const save = h('button', { class: 'primary', onclick: async () => {
+    if (!patientId) return toast('Chưa chọn bệnh nhân', 'warn');
+    if (time.value && !duration) return toast('Nhập thời lượng dự kiến', 'warn');
+    save.disabled = true;
+    try {
+      const r = await api('saveAppointment', { appt_id: id || '', patient_id: patientId, appt_date: date.value, start_time: time.value,
+        duration_min: time.value ? duration : (duration || ''), title: title.value, notes: notes.value, status: id ? status.value : 'scheduled', visit_id: a.visit_id || '' });
+      dirty = false;
+      if (r.conflicts.length) toast('Đã lưu · Trùng giờ với: ' + r.conflicts.join(', '), 'warn'); else toast('Đã lưu lịch hẹn');
+      back();
+    } catch (e) { toast(errMsg(e), 'error'); save.disabled = false; }
+  } }, 'Lưu');
+  mount(
+    h('div', { class: 'row-actions' }, h('button', { onclick: back }, '← Lịch hẹn')),
+    h('section', { class: 'card' }, h('h2', {}, id ? 'Sửa lịch hẹn' : 'Lịch hẹn mới'),
+      h('div', { class: 'grid-form' },
+        field('Bệnh nhân *', picker, true),
+        field('Ngày *', date), field('Giờ bắt đầu', time),
+        field('Thời lượng dự kiến', h('div', {}, dur.el, endInfo), true),
+        field('Nội dung', title, true), field('Ghi chú', notes, true),
+        id ? field('Trạng thái', status) : null),
+      h('div', { class: 'row-actions', style: 'margin-top:12px' }, save, h('button', { onclick: back }, 'Huỷ'),
+        id ? h('button', { class: 'danger', onclick: async () => {
+          if (!confirm('Xoá lịch hẹn này?')) return;
+          try { await api('deleteAppointment', id); dirty = false; toast('Đã xoá lịch hẹn'); back(); } catch (e) { toast(errMsg(e), 'error'); }
+        } }, 'Xoá') : null)));
+}
+</script>

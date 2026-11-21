@@ -68,9 +68,15 @@
   ];
   const KID_PROC = () => { const t = pick([54, 55, 64, 65, 74, 75, 84, 85]); return { reason: 'Sâu răng sữa', diagnosis: `Sâu R${t}`, teeth: String(t), treatment: 'Trám GIC', cost: 300000, imgs: ['truoc'] }; };
 
+  const DUR = [15, 30, 30, 45, 60, 60, 90, 120];
+  const randTime = () => minToT(8 * 60 + 15 * Math.floor(rnd() * 44)); // 08:00–18:45
+  const minToT = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
   const addVisit = (pid, date, proc, opts = {}) => {
     const debt = chance(0.2) ? Math.round(proc.cost * pick([0.3, 0.5]) / 1000) * 1000 : 0;
-    const vid = S.saveVisit(Object.assign({ patient_id: pid, visit_date: date, paid: proc.cost - debt }, proc, opts));
+    const next = opts.next_appointment;
+    delete opts.next_appointment;
+    const appointment = next ? { appt_date: next, start_time: opts.next_time || randTime(), duration_min: opts.next_dur || pick(DUR), title: proc.plan || 'Tái khám' } : null;
+    const vid = S.saveVisit(Object.assign({ patient_id: pid, visit_date: date, paid: proc.cost - debt, appointment }, proc, opts));
     addImages(vid, (opts.imgs || proc.imgs).map((l, i) => [`${l}-${date}-${i + 1}.jpg`, l]));
     return vid;
   };
@@ -82,7 +88,7 @@
   addVisit(an, day(-40), { reason: 'Đau răng hàm dưới phải', diagnosis: 'Viêm tuỷ không hồi phục R46', teeth: '46', treatment: 'Lấy tuỷ, trám tạm',
     plan: 'Chữa tuỷ lần 2, làm sứ', prescription: 'Clindamycin 300mg x 15v (dị ứng Penicillin)', cost: 1200000, imgs: ['xquang', 'truoc'] }, { paid: 1200000 });
   addVisit(an, day(-7), { reason: 'Chữa tuỷ lần 2', diagnosis: 'R46 sau lấy tuỷ', teeth: '46', treatment: 'Trám bít ống tuỷ', plan: 'Lắp mão sứ',
-    cost: 3500000, imgs: ['xquang', 'sau', 'khac'] }, { paid: 2000000, next_appointment: day(2) });
+    cost: 3500000, imgs: ['xquang', 'sau', 'khac'] }, { paid: 2000000, next_appointment: day(2), next_time: '09:00', next_dur: 60 });
 
   const binh = addPatient({ full_name: 'Trần Thị Bình', birth_year: 1990, gender: 'Nữ', phone: '0938123456', address: 'Q. Phú Nhuận, TP.HCM' }, thisYear - 2);
   for (let k = 0; k < 6; k++) addVisit(binh, day(-28 * (6 - k) - 1), PROCS[6](0), k === 5 ? { next_appointment: day(5) } : {});
@@ -127,6 +133,22 @@
       addVisit(pid, dateOf(d), kid ? KID_PROC() : pick(PROCS)(pick(FDI)),
         isLast && chance(0.35) ? { next_appointment: day(Math.floor(rnd() * 8)) } : {});
       d = new Date(d.getTime() + (20 + Math.floor(rnd() * 200)) * 864e5);
+    }
+  }
+
+  // Calendar: appointments from 2 weeks ago to 5 weeks ahead (timed, some untimed, mixed statuses)
+  const pids = S.readActive_('Patients').map(p => p.patient_id);
+  const TITLES = ['Khám tổng quát', 'Cạo vôi', 'Trám răng', 'Chữa tuỷ lần 2', 'Lắp mão sứ', 'Tái khám niềng', 'Cắt chỉ', 'Tư vấn implant', 'Tẩy trắng', 'Nhổ răng khôn'];
+  for (let off = -14; off <= 35; off++) {
+    const dt = day(off);
+    const dow = new Date(Date.now() + off * 864e5).getDay();
+    const n = dow === 0 ? (chance(0.3) ? 1 : 0) : 2 + Math.floor(rnd() * 5);
+    for (let k = 0; k < n; k++) {
+      const timed = chance(0.92);
+      const status = off < 0 ? (chance(0.8) ? 'arrived' : chance(0.5) ? 'no_show' : 'cancelled') : (chance(0.05) ? 'cancelled' : 'scheduled');
+      const r = S.saveAppointment({ patient_id: pick(pids), appt_date: dt, start_time: timed ? randTime() : '', duration_min: timed ? pick(DUR) : '',
+        title: pick(TITLES), notes: chance(0.15) ? 'Nhắc BN nhịn ăn 2 giờ trước' : '', status });
+      void r;
     }
   }
 

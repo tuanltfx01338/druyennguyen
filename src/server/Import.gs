@@ -74,7 +74,7 @@ function importCommit(runId, offset) {
         var ids = reserveIds_(Number(y), byYear[y].length);
         byYear[y].forEach(function (p, i) { p.patient_id = ids[i]; });
       });
-      var pRows = [], vRows = [], logs = [], ts = now_();
+      var pRows = [], vRows = [], aRows = [], logs = [], ts = now_();
       todo.forEach(function (p) {
         p.folder_id = createPatientFolder_(p.patient_id, p.full_name).getId();
         p.name_search = normalizeText(p.full_name);
@@ -85,11 +85,16 @@ function importCommit(runId, offset) {
           v.visit_id = Utilities.getUuid(); v.patient_id = p.patient_id; v.source = 'import'; v.folder_id = '';
           v.created_at = v.updated_at = ts; v.deleted = false;
           vRows.push(v);
+          // Excel "Hẹn tái khám" has a date only → appointment without time (shown in the all-day row).
+          if (v.next_appointment) aRows.push({ appt_id: Utilities.getUuid(), patient_id: p.patient_id, appt_date: v.next_appointment,
+            start_time: '', duration_min: '', title: v.plan || 'Tái khám', notes: '', status: v.next_appointment < today_() ? 'arrived' : 'scheduled',
+            visit_id: v.visit_id, created_at: ts, updated_at: ts, deleted: false });
         });
         logs.push({ run_id: runId, at: ts, sheet: 'BenhNhan', row: p.import_stt, status: 'ok', message: p.patient_id });
       });
       appendRows_('Patients', pRows);
       appendRows_('Visits', vRows);
+      appendRows_('Appointments', aRows);
       appendRows_('ImportLog', logs);
       created = todo.length;
     });

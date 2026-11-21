@@ -63,6 +63,9 @@ const routes = [
   [/^p\/([^/]+)$/, m => pagePatient(m[1])],
   [/^v\/([^/]+)$/, m => pageVisitForm({ visitId: m[1] })],
   [/^import$/, () => pageImport()],
+  [/^calendar$/, () => pageCalendar()],
+  [/^a\/new$/, () => pageAppointmentForm()],
+  [/^a\/([^/]+)$/, m => pageAppointmentForm(m[1])],
 ];
 function canLeave() {
   if (uploadBusy) return confirm('Ảnh đang tải lên. Rời trang sẽ dừng tải. Vẫn rời?');
@@ -75,15 +78,18 @@ function go(path, push = true) {
   if (push) google.script.history.push({ path }, null, path);
   render(path);
 }
+let curPath = '';
+const currentPath = () => curPath;
 function render(path) {
+  curPath = path;
   window.scrollTo(0, 0);
+  document.querySelectorAll('.topbar nav a').forEach(a => a.classList.toggle('active', a.dataset.path === (path.split('/')[0] === 'a' ? 'calendar' : path === '' ? '' : path.startsWith('p/') ? 'patients' : path)));
   for (const [re, fn] of routes) { const m = path.match(re); if (m) return fn(m); }
   pageDashboard();
 }
 function start() {
   document.getElementById('home-link').addEventListener('click', e => { e.preventDefault(); go(''); });
-  document.getElementById('nav-dash').addEventListener('click', e => { e.preventDefault(); go(''); });
-  document.getElementById('nav-patients').addEventListener('click', e => { e.preventDefault(); go('patients'); });
+  document.querySelectorAll('.topbar nav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.path); }));
   google.script.history.setChangeHandler(e => { dirty = false; uploadBusy = false; render((e.state && e.state.path) || ''); });
   window.addEventListener('beforeunload', e => { if (dirty || uploadBusy) { e.preventDefault(); e.returnValue = ''; } });
   google.script.url.getLocation(loc => render(loc.hash || ''));
@@ -192,7 +198,8 @@ async function pageDashboard() {
     h('section', { class: 'card' }, search,
       h('div', { class: 'row-actions', style: 'margin:0' },
         h('button', { class: 'primary', onclick: () => go('p/new') }, '+ Bệnh nhân'),
-        h('button', { onclick: () => go('patients') }, 'Danh sách bệnh nhân'),
+        h('button', { onclick: () => newAppointment() }, '+ Lịch hẹn'),
+        h('button', { onclick: () => openCalendar() }, 'Lịch hẹn'),
         h('button', { onclick: () => go('import') }, 'Nhập dữ liệu cũ'))),
     shell, quota);
 
@@ -215,17 +222,21 @@ async function pageDashboard() {
     h('div', { class: 'dash-date' }, `Hôm nay ${dd}/${m}/${y}`),
     h('div', { class: 'stats' },
       statTile('Khám hôm nay', s.visitsToday, s.visitsToday ? 'lần khám' : 'chưa có'),
-      statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} hẹn trong 7 ngày`, () => document.getElementById('dash-appt').scrollIntoView({ behavior: 'smooth' })),
+      statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} hẹn trong 7 ngày`, () => openCalendar('day', d.today)),
       statTile('Khám tháng này', s.visitsMonth, 'lần khám'),
       statTile('Đã thu tháng này', fmtShortMoney(s.paidMonth), fmtMoney(s.paidMonth)),
       statTile('Công nợ', fmtShortMoney(s.totalDebt), `${s.debtorCount} bệnh nhân`, s.debtorCount ? () => document.getElementById('dash-debt').scrollIntoView({ behavior: 'smooth' }) : null, s.totalDebt ? 'warn' : ''),
       statTile('Tổng bệnh nhân', s.patients, 'hồ sơ', () => go('patients'))),
     h('div', { class: 'dash-grid' },
-      h('section', { class: 'card', id: 'dash-appt' }, h('h3', {}, `Hẹn tái khám 7 ngày tới (${d.upcoming.length})`),
-        h('div', { class: 'list' }, listOrEmpty(d.upcoming.map(a => link('p/' + a.patient_id,
-          h('span', { class: 'badge' + (a.next_appointment === d.today ? ' red' : ''), style: 'margin:0 6px 0 0' }, dayLabel(a.next_appointment, d.today)),
-          h('b', {}, a.full_name), ' ', h('span', { class: 'muted' }, a.phone || ''),
-          a.plan ? h('div', { class: 'muted' }, a.plan) : null)), 'Không có lịch hẹn'))),
+      h('section', { class: 'card', id: 'dash-appt' },
+        h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, `Lịch hẹn 7 ngày tới (${d.upcoming.length})`),
+          h('button', { onclick: () => openCalendar('week', d.today) }, 'Mở lịch')),
+        h('div', { class: 'list' }, listOrEmpty(d.upcoming.map(a => h('a', { href: '#', class: 'item' + (a.status === 'cancelled' ? ' muted' : ''),
+          onclick: e => { e.preventDefault(); openCalendar('day', a.appt_date); } },
+          h('span', { class: 'badge' + (a.appt_date === d.today ? ' red' : ''), style: 'margin:0 6px 0 0' }, dayLabel(a.appt_date, d.today)),
+          h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name),
+          a.status === 'arrived' ? h('span', { class: 'badge' }, '✓ Đã đến') : null,
+          h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title, a.phone].filter(Boolean).join(' · ')))), 'Không có lịch hẹn'))),
       h('section', { class: 'card' }, h('h3', {}, `Khám hôm nay (${d.todayVisits.length})`),
         h('div', { class: 'list' }, listOrEmpty(d.todayVisits.map(v => link('p/' + v.patient_id,
           h('b', {}, v.full_name), v.reason ? ' · ' + v.reason : '', v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null)),
@@ -290,7 +301,7 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
           v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null),
         kv([['Chẩn đoán', v.diagnosis], ['Răng', v.teeth], ['Điều trị', v.treatment], ['Kế hoạch', v.plan],
           ['Đơn thuốc', v.prescription], ['Chi phí', fmtMoney(v.cost)], ['Đã thu', fmtMoney(v.paid)],
-          ['Còn nợ', v.debt ? fmtMoney(v.debt) : ''], ['Hẹn tái khám', fmtDate(v.next_appointment)], ['Ghi chú', v.notes]]),
+          ['Còn nợ', v.debt ? fmtMoney(v.debt) : ''], ['Hẹn tái khám', v.appointment ? fmtDate(v.appointment.appt_date) + ' · ' + apptTimeText(v.appointment) : ''], ['Ghi chú', v.notes]]),
         grid || h('div', { class: 'muted' }, 'Chưa có ảnh'),
         h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { onclick: () => go('v/' + v.visit_id) }, 'Sửa / thêm ảnh')));
       if (idx === 0) { det.dataset.loaded = '1'; setTimeout(() => loadThumbs(v.images)); }
@@ -335,8 +346,12 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
       p.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies) : null,
       p.systemic_diseases ? h('div', { class: 'muted' }, 'Bệnh toàn thân: ' + p.systemic_diseases) : null,
       data.total_debt ? h('div', { style: 'color:var(--red);font-weight:600;margin-top:4px' }, 'Tổng còn nợ: ' + fmtMoney(data.total_debt)) : null,
+      data.appointments.length ? h('div', { class: 'appt-line' }, data.appointments.slice(0, 3).map(a =>
+        h('button', { class: 'ev st-' + a.status + ' appt-chip', onclick: () => openCalendar('day', a.appt_date) },
+          '📅 ' + dayLabel(a.appt_date, todayStr()) + ' ' + (a.start_time ? a.start_time + ` (${a.duration_min}')` : '(chưa đặt giờ)') + (a.title ? ' · ' + a.title : '')))) : null,
       h('div', { class: 'row-actions', style: 'margin:8px 0 0' },
-        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, '+ Lần khám'))),
+        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, '+ Lần khám'),
+        h('button', { onclick: () => newAppointment({ patient_id: id }) }, '+ Lịch hẹn'))),
     h('div', { class: 'tabs' }, tabDefs.map(([k, label]) => (tabBtns[k] = h('button', { class: 'tab', onclick: () => show(k) }, label)))),
     body);
   show(current);
@@ -492,7 +507,6 @@ async function pageVisitForm({ patientId, visitId }) {
     { name: 'prescription', label: 'Đơn thuốc', type: 'textarea' },
     { name: 'cost', label: 'Chi phí (VNĐ)', type: 'number', inputmode: 'numeric', min: 0 },
     { name: 'paid', label: 'Đã thu (VNĐ)', type: 'number', inputmode: 'numeric', min: 0 },
-    { name: 'next_appointment', label: 'Hẹn tái khám', type: 'date' },
     { name: 'notes', label: 'Ghi chú', type: 'textarea' },
   ], visit);
   const debt = h('div', { class: 'muted' });
@@ -500,6 +514,20 @@ async function pageVisitForm({ patientId, visitId }) {
   f.inputs.cost.addEventListener('input', updDebt); f.inputs.paid.addEventListener('input', updDebt); updDebt();
 
   const existing = h('div', {}, thumbGrid(images, () => go('v/' + visitId, false)));
+
+  // Follow-up appointment booked during this visit (creates/updates the linked appointment).
+  const ap = visit.appointment || {};
+  const apDate = h('input', { type: 'date', value: ap.appt_date || '', oninput: () => { dirty = true; } });
+  const apTime = h('input', { type: 'time', value: ap.start_time || '', step: 300, oninput: () => { dirty = true; } });
+  let apDur = ap.duration_min ? String(ap.duration_min) : '';
+  const apDurPick = durationPicker(apDur, v => { apDur = v; dirty = true; });
+  const apTitle = h('input', { value: ap.title || '', placeholder: 'Mặc định lấy theo "Kế hoạch tiếp"', oninput: () => { dirty = true; } });
+  const apSection = h('section', { class: 'card' }, h('h3', {}, 'Hẹn tái khám'),
+    ap.appt_id ? h('div', { class: 'muted' }, `Đã có lịch hẹn (${(APPT_STATUS[ap.status] || {}).label || ''}) — sửa ở đây hoặc trên Lịch hẹn.`) : null,
+    h('div', { class: 'grid-form' },
+      h('div', {}, h('label', {}, 'Ngày hẹn'), apDate), h('div', {}, h('label', {}, 'Giờ (để trống nếu chưa chốt)'), apTime),
+      h('div', { class: 'full' }, h('label', {}, 'Thời lượng dự kiến'), apDurPick.el),
+      h('div', { class: 'full' }, h('label', {}, 'Nội dung hẹn'), apTitle)));
   const uploader = createUploader({
     getVisitId: () => visitId,
     onUploaded: imgs => {
@@ -516,7 +544,10 @@ async function pageVisitForm({ patientId, visitId }) {
     if (!d.visit_date) return toast('Thiếu ngày khám', 'warn');
     save.disabled = true;
     try {
-      const id = await api('saveVisit', { ...d, visit_id: visitId, patient_id: patientId });
+      if (apDate.value && apTime.value && !apDur) { save.disabled = false; return toast('Nhập thời lượng dự kiến cho lịch hẹn', 'warn'); }
+      const appointment = apDate.value ? { appt_date: apDate.value, start_time: apTime.value, duration_min: apDur,
+        title: apTitle.value || d.plan || 'Tái khám' } : null;
+      const id = await api('saveVisit', { ...d, visit_id: visitId, patient_id: patientId, appointment });
       dirty = false;
       if (!visitId) { // stay on this page as "edit" so queued photos keep their progress
         visitId = id;
@@ -538,6 +569,7 @@ async function pageVisitForm({ patientId, visitId }) {
     patient.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + patient.allergies) : null,
     h('section', { class: 'card' }, title, h('div', { class: 'muted' }, patient.full_name + ' · ' + patient.patient_id), f.el, debt),
     h('section', { class: 'card' }, h('h3', {}, 'Ảnh chụp'), existing, uploader.el),
+    apSection,
     h('div', { class: 'row-actions' }, save, h('button', { onclick: () => go('p/' + patientId) }, 'Huỷ'),
       visitId ? h('button', { class: 'danger', onclick: async () => {
         if (!confirm('Xoá lần khám này?')) return;

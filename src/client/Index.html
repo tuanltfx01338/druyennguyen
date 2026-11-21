@@ -6,11 +6,12 @@
   <?!= include('client/Styles'); ?>
 </head>
 <body>
-  <header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án</a><nav><a href="#" id="nav-dash">Tổng quan</a><a href="#" id="nav-patients">Bệnh nhân</a></nav></header>
+  <header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án</a><nav><a href="#" data-path="">Tổng quan</a><a href="#" data-path="calendar">Lịch hẹn</a><a href="#" data-path="patients">Bệnh nhân</a></nav></header>
   <main id="app"></main>
   <div id="toast" role="status"></div>
   <?!= include('client/App.js'); ?>
   <?!= include('client/Upload.js'); ?>
+  <?!= include('client/Calendar.js'); ?>
   <?!= include('client/Import.js'); ?>
   <script>start();</script>
 </body>

@@ -42,7 +42,14 @@ function getPatient(id) {
       v.images = imgs.filter(function (i) { return i.visit_id === v.visit_id; }).map(publicImage_);
       delete v._row;
     });
-    return { patient: publicPatient_(p), visits: visits, total_debt: debt };
+    var appts = readActive_('Appointments').filter(function (a) { return a.patient_id === id; });
+    visits.forEach(function (v) {
+      v.appointment = appts.filter(function (a) { return a.visit_id === v.visit_id; }).map(publicAppointment_)[0] || null;
+    });
+    var today = today_();
+    var upcoming = sortAppointments(appts.filter(function (a) { return a.appt_date >= today && a.status !== 'cancelled'; }))
+      .map(publicAppointment_);
+    return { patient: publicPatient_(p), visits: visits, total_debt: debt, appointments: upcoming };
   });
 }
 
