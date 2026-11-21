@@ -26,7 +26,6 @@ const labelOptions = sel => Object.entries(LABELS).map(([k, v]) => h('option', {
 const pad = n => String(n).padStart(2, '0');
 const todayStr = (offset = 0) => { const d = new Date(Date.now() + offset * 864e5); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const fmtDate = s => s ? String(s).split('-').reverse().join('/') : '';
-const fmtMoney = n => (n === '' || n == null) ? '' : Number(n).toLocaleString('vi-VN') + ' đ';
 const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
 const errMsg = e => (e && e.message) || String(e);
 
@@ -42,6 +41,9 @@ function errBox(e, retry) {
 function link(path, ...kids) {
   return h('a', { href: '#', class: 'item', onclick: e => { e.preventDefault(); go(path); } }, ...kids);
 }
+function blobToDataUrl(blob) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+}
 function blobToBase64(blob) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -50,6 +52,40 @@ function blobToBase64(blob) {
     r.readAsDataURL(blob);
   });
 }
+
+/* ---------- avatar (portrait) ---------- */
+const AV_COLORS = ['#00897b', '#5c6bc0', '#8d6e63', '#00838f', '#7cb342', '#f4511e', '#6d4c41', '#3949ab'];
+const initialsOf = n => { const w = String(n || '?').trim().split(/\s+/); return ((w.length > 1 ? w[w.length - 2][0] : '') + w[w.length - 1][0]).toUpperCase(); };
+const avatarQueue = new Map(); // avatar_id → [elements waiting for the image]
+let avatarTimer;
+/** Round portrait; initials on a colored disc until (or if no) photo. */
+function avatar(p, size = 40) {
+  const hash = [...String(p.patient_id || p.full_name || '')].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const el = h('span', { class: 'avatar', style: `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.38)}px;background:${AV_COLORS[hash % AV_COLORS.length]}` },
+    initialsOf(p.full_name));
+  if (p.avatar_id) {
+    if (thumbCache.has(p.avatar_id)) setAvatarImg(el, thumbCache.get(p.avatar_id));
+    else { (avatarQueue.get(p.avatar_id) || avatarQueue.set(p.avatar_id, []).get(p.avatar_id)).push(el); clearTimeout(avatarTimer); avatarTimer = setTimeout(flushAvatars, 30); }
+  }
+  return el;
+}
+const setAvatarImg = (el, src) => el.replaceChildren(h('img', { src, alt: '' }));
+async function flushAvatars() {
+  const ids = [...avatarQueue.keys()];
+  for (let i = 0; i < ids.length; i += 30) {
+    const batch = ids.slice(i, i + 30);
+    let res = {};
+    try { res = await api('getThumbs', batch); } catch (e) { /* keep initials */ }
+    batch.forEach(id => {
+      const els = avatarQueue.get(id) || [];
+      avatarQueue.delete(id);
+      if (!res[id]) return;
+      thumbCache.set(id, res[id]);
+      els.forEach(el => setAvatarImg(el, res[id]));
+    });
+  }
+}
+const phonesOf = p => String(p.phone || '').split(',').map(x => x.trim()).filter(Boolean);
 
 /* ---------- router (google.script.history keeps browser Back working inside the iframe) ---------- */
 let dirty = false;
@@ -97,16 +133,22 @@ function start() {
 
 /* ---------- home ---------- */
 function patientRow(p) {
-  return link('p/' + p.patient_id,
-    h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
-    p.allergies ? h('span', { class: 'badge red' }, 'Dị ứng') : null,
-    h('div', { class: 'muted' }, [p.birth_year ? 'Sinh ' + p.birth_year : '', p.phone].filter(Boolean).join(' · ')));
+  return h('a', { href: '#', class: 'item row-av', onclick: e => { e.preventDefault(); go('p/' + p.patient_id); } },
+    avatar(p, 44),
+    h('div', { class: 'row-main' },
+      h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
+        p.allergies ? h('span', { class: 'badge red' }, 'Dị ứng') : null),
+      h('div', { class: 'muted' }, [p.birth_year ? 'Sinh ' + p.birth_year : '', phonesOf(p).join(' · '), p.national_id ? 'CCCD ' + p.national_id : ''].filter(Boolean).join(' · '))));
+}
+/** List row with a small avatar for dashboard/calendar lists. */
+function avRow(p, onclick, ...main) {
+  return h('a', { href: '#', class: 'item row-av', onclick: e => { e.preventDefault(); onclick(); } }, avatar(p, 36), h('div', { class: 'row-main' }, ...main));
 }
 
 /* ---------- patients list (search) ---------- */
 let pendingQuery = '';
 function pagePatients() {
-  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tìm tên (không dấu cũng được), mã BN hoặc SĐT…', autocomplete: 'off', value: pendingQuery });
+  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tìm tên (không dấu cũng được), mã BN, SĐT hoặc CCCD…', autocomplete: 'off', value: pendingQuery });
   pendingQuery = '';
   const results = h('div', { class: 'list' });
   const from = h('input', { type: 'date', value: todayStr(-30) });
@@ -132,8 +174,8 @@ function pagePatients() {
     try {
       const list = await api('searchVisitsByDate', from.value, to.value);
       visitsBox.replaceChildren(h('div', { class: 'muted' }, list.length + ' lần khám'),
-        ...list.map(v => link('p/' + v.patient_id, h('b', {}, fmtDate(v.visit_date)), ' · ', v.full_name,
-          h('span', { class: 'badge' }, v.patient_id), h('div', { class: 'muted' }, v.diagnosis || v.treatment || ''))));
+        ...list.map(v => avRow(v, () => go('p/' + v.patient_id), h('div', {}, h('b', {}, fmtDate(v.visit_date)), ' · ', v.full_name,
+          h('span', { class: 'badge' }, v.patient_id)), h('div', { class: 'muted' }, v.diagnosis || v.treatment || ''))));
     } catch (e) { visitsBox.replaceChildren(errBox(e, searchDates)); }
   }
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 300); });
@@ -153,7 +195,6 @@ function pagePatients() {
 const CHART_COLOR = '#00897b'; // single series; passes dataviz validator (lightness, chroma, contrast) on white
 const dayLabel = (d, today) => d === today ? 'Hôm nay' : d === addDaysStr(today, 1) ? 'Ngày mai' : fmtDate(d);
 function addDaysStr(s, n) { const [y, m, d] = s.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, d + n)); return t.toISOString().slice(0, 10); }
-const fmtShortMoney = n => n >= 1e9 ? (n / 1e9).toFixed(1).replace('.0', '') + ' tỷ' : n >= 1e6 ? (n / 1e6).toFixed(1).replace('.0', '') + ' tr' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
 
 function statTile(label, value, sub, onclick, tone) {
   return h(onclick ? 'button' : 'div', { class: 'stat' + (tone ? ' ' + tone : ''), onclick },
@@ -169,7 +210,7 @@ function monthChart(monthly, key, unitFmt) {
   const ticks = [0, top / 2, top].map(t => h('div', { class: 'grid-line', style: `bottom:${t / top * 100}%` }, h('span', {}, unitFmt(t))));
   const bars = monthly.map((m, i) => {
     const [y, mo] = m.month.split('-');
-    const text = `Tháng ${Number(mo)}/${y}: ${key === 'paid' ? fmtMoney(m[key]) : m[key] + ' lần khám'}`;
+    const text = `Tháng ${Number(mo)}/${y}: ${m[key]} lần khám`;
     const show = () => { caption.textContent = text; cols.forEach(c => c.classList.remove('sel')); col.classList.add('sel'); };
     const isLast = i === monthly.length - 1;
     const col = h('button', { class: 'col', 'aria-label': text, onclick: show, onmouseenter: show },
@@ -190,7 +231,7 @@ function niceStep(x) {
 }
 
 async function pageDashboard() {
-  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Tìm bệnh nhân: tên, mã, SĐT…', autocomplete: 'off',
+  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Tìm bệnh nhân: tên, mã, SĐT, CCCD…', autocomplete: 'off',
     onkeydown: e => { if (e.key === 'Enter') { pendingQuery = search.value; go('patients'); } } });
   const quota = h('div', { class: 'quota' });
   const shell = h('div', {}, h('div', { class: 'loading' }, 'Đang tải tổng quan…'));
@@ -209,14 +250,6 @@ async function pageDashboard() {
   const [y, m, dd] = d.today.split('-');
   const listOrEmpty = (items, empty) => items.length ? items : [h('div', { class: 'muted', style: 'padding:6px' }, empty)];
 
-  let chartKey = 'visits';
-  const chartBox = h('div');
-  const segBtns = {};
-  const drawChart = k => {
-    chartKey = k;
-    Object.entries(segBtns).forEach(([kk, b]) => b.classList.toggle('active', kk === k));
-    chartBox.replaceChildren(monthChart(d.monthly, k, k === 'paid' ? fmtShortMoney : String));
-  };
 
   shell.replaceChildren(
     h('div', { class: 'dash-date' }, `Hôm nay ${dd}/${m}/${y}`),
@@ -224,35 +257,27 @@ async function pageDashboard() {
       statTile('Khám hôm nay', s.visitsToday, s.visitsToday ? 'lần khám' : 'chưa có'),
       statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} hẹn trong 7 ngày`, () => openCalendar('day', d.today)),
       statTile('Khám tháng này', s.visitsMonth, 'lần khám'),
-      statTile('Đã thu tháng này', fmtShortMoney(s.paidMonth), fmtMoney(s.paidMonth)),
-      statTile('Công nợ', fmtShortMoney(s.totalDebt), `${s.debtorCount} bệnh nhân`, s.debtorCount ? () => document.getElementById('dash-debt').scrollIntoView({ behavior: 'smooth' }) : null, s.totalDebt ? 'warn' : ''),
-      statTile('Tổng bệnh nhân', s.patients, 'hồ sơ', () => go('patients'))),
+      statTile('Tổng bệnh nhân', s.patients, s.newPatientsMonth ? `+${s.newPatientsMonth} mới tháng này` : 'hồ sơ', () => go('patients'))),
     h('div', { class: 'dash-grid' },
       h('section', { class: 'card', id: 'dash-appt' },
         h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, `Lịch hẹn 7 ngày tới (${d.upcoming.length})`),
           h('button', { onclick: () => openCalendar('week', d.today) }, 'Mở lịch')),
-        h('div', { class: 'list' }, listOrEmpty(d.upcoming.map(a => h('a', { href: '#', class: 'item' + (a.status === 'cancelled' ? ' muted' : ''),
-          onclick: e => { e.preventDefault(); openCalendar('day', a.appt_date); } },
-          h('span', { class: 'badge' + (a.appt_date === d.today ? ' red' : ''), style: 'margin:0 6px 0 0' }, dayLabel(a.appt_date, d.today)),
-          h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name),
-          a.status === 'arrived' ? h('span', { class: 'badge' }, '✓ Đã đến') : null,
-          h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title, a.phone].filter(Boolean).join(' · ')))), 'Không có lịch hẹn'))),
+        h('div', { class: 'list' }, listOrEmpty(d.upcoming.map(a => avRow(a, () => openCalendar('day', a.appt_date),
+          h('div', {}, h('span', { class: 'badge' + (a.appt_date === d.today ? ' red' : ''), style: 'margin:0 6px 0 0' }, dayLabel(a.appt_date, d.today)),
+            h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name),
+            a.status === 'arrived' ? h('span', { class: 'badge' }, '✓ Đã đến') : null),
+          h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title, phonesOf(a)[0]].filter(Boolean).join(' · ')))), 'Không có lịch hẹn'))),
       h('section', { class: 'card' }, h('h3', {}, `Khám hôm nay (${d.todayVisits.length})`),
-        h('div', { class: 'list' }, listOrEmpty(d.todayVisits.map(v => link('p/' + v.patient_id,
-          h('b', {}, v.full_name), v.reason ? ' · ' + v.reason : '', v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null)),
+        h('div', { class: 'list' }, listOrEmpty(d.todayVisits.map(v => avRow(v, () => go('p/' + v.patient_id),
+          h('div', {}, h('b', {}, v.full_name), v.reason ? ' · ' + v.reason : ''), v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null)),
           'Chưa có lần khám nào hôm nay'))),
-      h('section', { class: 'card' },
-        h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, '6 tháng gần nhất'),
-          h('div', { class: 'seg' },
-            segBtns.visits = h('button', { onclick: () => drawChart('visits') }, 'Lần khám'),
-            segBtns.paid = h('button', { onclick: () => drawChart('paid') }, 'Đã thu'))),
-        chartBox),
-      h('section', { class: 'card', id: 'dash-debt' }, h('h3', {}, `Bệnh nhân còn nợ (${s.debtorCount})`),
-        h('div', { class: 'list' }, listOrEmpty(d.debtors.map(x => link('p/' + x.patient_id,
-          h('b', {}, x.full_name), ' ', h('span', { class: 'muted' }, x.phone || ''),
-          h('span', { class: 'debt' }, fmtMoney(x.debt)))), 'Không có công nợ')),
-        s.debtorCount > d.debtors.length ? h('div', { class: 'muted' }, `Hiển thị 10/${s.debtorCount} bệnh nhân nợ nhiều nhất`) : null)));
-  drawChart(chartKey);
+      h('section', { class: 'card' }, h('h3', {}, 'Lần khám 6 tháng gần nhất'), monthChart(d.monthly, 'visits', String)),
+      h('section', { class: 'card' }, h('h3', {}, `Lỡ hẹn 30 ngày qua (${s.missed30})`),
+        h('div', { class: 'muted', style: 'margin-top:-4px' }, 'Bệnh nhân không đến — nên gọi hẹn lại'),
+        h('div', { class: 'list' }, listOrEmpty(d.missed.map(a => avRow(a, () => go('p/' + a.patient_id),
+          h('div', {}, h('b', {}, a.full_name), ' ', h('span', { class: 'muted' }, phonesOf(a).join(' · '))),
+          h('div', { class: 'muted' }, ['✗ ' + fmtDate(a.appt_date), a.start_time, a.title].filter(Boolean).join(' · ')))), 'Không có ai lỡ hẹn')),
+        s.missed30 > d.missed.length ? h('div', { class: 'muted' }, `Hiển thị 10/${s.missed30} gần nhất`) : null)));
 
   api('getStorageQuota').then(q => {
     const pct = Math.round(q.ratio * 100);
@@ -296,12 +321,10 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
           h('div', { class: 'visit-sum' },
             h('b', {}, fmtDate(v.visit_date)), v.reason ? ' · ' + v.reason : '',
             v.images.length ? h('span', { class: 'badge' }, '📷 ' + v.images.length) : null,
-            v.debt ? h('span', { class: 'badge red' }, 'Nợ ' + fmtMoney(v.debt)) : null,
             v.source !== 'app' ? h('span', { class: 'badge' }, 'Dữ liệu cũ') : null),
           v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null),
         kv([['Chẩn đoán', v.diagnosis], ['Răng', v.teeth], ['Điều trị', v.treatment], ['Kế hoạch', v.plan],
-          ['Đơn thuốc', v.prescription], ['Chi phí', fmtMoney(v.cost)], ['Đã thu', fmtMoney(v.paid)],
-          ['Còn nợ', v.debt ? fmtMoney(v.debt) : ''], ['Hẹn tái khám', v.appointment ? fmtDate(v.appointment.appt_date) + ' · ' + apptTimeText(v.appointment) : ''], ['Ghi chú', v.notes]]),
+          ['Đơn thuốc', v.prescription], ['Hẹn tái khám', v.appointment ? fmtDate(v.appointment.appt_date) + ' · ' + apptTimeText(v.appointment) : ''], ['Ghi chú', v.notes]]),
         grid || h('div', { class: 'muted' }, 'Chưa có ảnh'),
         h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { onclick: () => go('v/' + v.visit_id) }, 'Sửa / thêm ảnh')));
       if (idx === 0) { det.dataset.loaded = '1'; setTimeout(() => loadThumbs(v.images)); }
@@ -327,9 +350,10 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
 
   function infoTab() {
     return [h('section', { class: 'card' },
-      kv([['Mã BN', p.patient_id], ['Ngày sinh', p.dob ? fmtDate(p.dob) : (p.birth_year || '')], ['Giới tính', p.gender], ['SĐT', p.phone],
+      kv([['Mã BN', p.patient_id], ['Số CCCD', p.national_id], ['Ngày sinh', p.dob ? fmtDate(p.dob) : (p.birth_year || '')], ['Giới tính', p.gender],
+        ['SĐT', phonesOf(p).join('\n')],
         ['Địa chỉ', p.address], ['Dị ứng', p.allergies], ['Bệnh toàn thân', p.systemic_diseases], ['Thuốc đang dùng', p.current_meds],
-        ['Ghi chú', p.notes], ['Tổng còn nợ', data.total_debt ? fmtMoney(data.total_debt) : '']]),
+        ['Ghi chú', p.notes]]),
       h('div', { class: 'row-actions' },
         h('button', { onclick: () => go('p/' + id + '/edit') }, 'Sửa thông tin'),
         h('button', { class: 'danger', onclick: async () => {
@@ -341,11 +365,14 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
   mount(
     h('div', { class: 'row-actions' }, h('button', { onclick: () => go('patients') }, '← Danh sách')),
     h('section', { class: 'card' },
-      h('div', { class: 'visit-head' }, h('h2', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)),
-      h('div', { class: 'muted' }, [p.dob ? fmtDate(p.dob) : (p.birth_year ? 'Sinh ' + p.birth_year : ''), p.gender, p.phone].filter(Boolean).join(' · ')),
+      h('div', { class: 'p-head' }, avatar(p, 72),
+        h('div', { class: 'row-main' },
+          h('div', { class: 'visit-head' }, h('h2', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)),
+          h('div', { class: 'muted' }, [p.dob ? fmtDate(p.dob) : (p.birth_year ? 'Sinh ' + p.birth_year : ''), p.gender].filter(Boolean).join(' · ')),
+          p.national_id ? h('div', { class: 'muted' }, 'CCCD ' + p.national_id) : null,
+          phonesOf(p).length ? h('div', { class: 'muted' }, '☎ ' + phonesOf(p).join(' · ')) : null)),
       p.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies) : null,
       p.systemic_diseases ? h('div', { class: 'muted' }, 'Bệnh toàn thân: ' + p.systemic_diseases) : null,
-      data.total_debt ? h('div', { style: 'color:var(--red);font-weight:600;margin-top:4px' }, 'Tổng còn nợ: ' + fmtMoney(data.total_debt)) : null,
       data.appointments.length ? h('div', { class: 'appt-line' }, data.appointments.slice(0, 3).map(a =>
         h('button', { class: 'ev st-' + a.status + ' appt-chip', onclick: () => openCalendar('day', a.appt_date) },
           '📅 ' + dayLabel(a.appt_date, todayStr()) + ' ' + (a.start_time ? a.start_time + ` (${a.duration_min}')` : '(chưa đặt giờ)') + (a.title ? ' · ' + a.title : '')))) : null,
@@ -457,34 +484,83 @@ function formFields(defs, values) {
   return { el: h('div', { class: 'grid-form' }, els), data: () => Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value])), inputs };
 }
 
+/** Several phone numbers: one input each, "+ Thêm số". */
+function phoneList(value) {
+  const box = h('div', { class: 'phones' });
+  const addRow = v => {
+    const inp = h('input', { type: 'tel', inputmode: 'tel', value: v || '', placeholder: '09xx xxx xxx', oninput: () => { dirty = true; } });
+    const row = h('div', { class: 'phone-row' }, inp, h('button', { type: 'button', 'aria-label': 'Xoá số', onclick: () => { row.remove(); dirty = true; if (!box.querySelector('input')) addRow(''); } }, '✕'));
+    box.insertBefore(row, addBtn);
+  };
+  const addBtn = h('button', { type: 'button', class: 'link-btn', onclick: () => addRow('') }, '+ Thêm số điện thoại');
+  box.append(addBtn);
+  const list = String(value || '').split(',').map(x => x.trim()).filter(Boolean);
+  (list.length ? list : ['']).forEach(addRow);
+  return { el: box, value: () => [...box.querySelectorAll('input')].map(i => i.value.trim()).filter(Boolean).join(', ') };
+}
+
 async function pagePatientForm(id) {
   let p = {};
   if (id) {
     loading();
     try { p = (await api('getPatient', id)).patient; } catch (e) { return mount(errBox(e, () => pagePatientForm(id))); }
   }
+  // Portrait: compressed in the browser, uploaded after the patient is saved.
+  let newAvatar = null; // { blob, dataUrl }
+  const avBox = h('div', { class: 'av-edit' }, avatar(p.patient_id ? p : { full_name: p.full_name || '?' }, 96));
+  const avInput = h('input', { type: 'file', accept: 'image/*', class: 'hidden', onchange: async () => {
+    const file = avInput.files[0];
+    avInput.value = '';
+    if (!file) return;
+    const blob = await compressImage(file, 640, 0.85);
+    const dataUrl = await blobToDataUrl(blob);
+    newAvatar = { blob, dataUrl };
+    dirty = true;
+    avBox.replaceChildren(h('span', { class: 'avatar', style: 'width:96px;height:96px' }, h('img', { src: dataUrl, alt: '' })));
+  } });
   const f = formFields([
     { name: 'full_name', label: 'Họ tên', required: true, full: true },
+    { name: 'national_id', label: 'Số CCCD (12 số)', inputmode: 'numeric' },
+    { name: 'gender', label: 'Giới tính', type: 'select', options: ['', 'Nam', 'Nữ'] },
     { name: 'dob', label: 'Ngày sinh', type: 'date' },
     { name: 'birth_year', label: 'Năm sinh (nếu không rõ ngày)', type: 'number', inputmode: 'numeric' },
-    { name: 'gender', label: 'Giới tính', type: 'select', options: ['', 'Nam', 'Nữ'] },
-    { name: 'phone', label: 'SĐT', type: 'tel' },
     { name: 'address', label: 'Địa chỉ', full: true },
     { name: 'allergies', label: 'Dị ứng', type: 'textarea' },
     { name: 'systemic_diseases', label: 'Bệnh toàn thân', type: 'textarea' },
     { name: 'current_meds', label: 'Thuốc đang dùng', type: 'textarea' },
     { name: 'notes', label: 'Ghi chú', type: 'textarea' },
   ], p);
+  f.inputs.national_id.maxLength = 15;
+  const phones = phoneList(p.phone);
+  f.el.insertBefore(h('div', { class: 'full' }, h('label', {}, 'Số điện thoại (có thể nhiều số)'), phones.el), f.inputs.address.parentNode);
   const save = h('button', { class: 'primary', onclick: async () => {
     const d = f.data();
     if (!d.full_name.trim()) return toast('Thiếu họ tên', 'warn');
+    const cccd = d.national_id.replace(/[\s.-]/g, '');
+    if (cccd && !/^\d{12}$/.test(cccd)) return toast('Số CCCD phải gồm đúng 12 chữ số', 'warn');
+    d.phone = phones.value();
     if (id) d.patient_id = id;
     save.disabled = true;
-    try { const newId = await api('savePatient', d); dirty = false; toast('Đã lưu'); go('p/' + newId); }
-    catch (e) { toast(errMsg(e), 'error'); save.disabled = false; }
+    try {
+      const pid = await api('savePatient', d);
+      if (newAvatar) {
+        save.textContent = 'Đang tải ảnh…';
+        try {
+          const ctx = await api('getAvatarUploadContext', pid);
+          const file = await sendToDrive({ file: new File([newAvatar.blob], `avatar_${pid}_${Date.now()}.jpg`, { type: newAvatar.blob.type || 'image/jpeg' }), setProgress() {} }, ctx);
+          await api('setPatientAvatar', pid, file.id);
+          thumbCache.set(file.id, newAvatar.dataUrl); // show immediately; Drive thumbnail may lag
+        } catch (e) { toast('Đã lưu hồ sơ nhưng chưa tải được ảnh: ' + errMsg(e), 'error'); }
+      }
+      dirty = false; toast('Đã lưu'); go('p/' + pid);
+    } catch (e) { toast(errMsg(e), 'error'); save.disabled = false; save.textContent = 'Lưu'; }
   } }, 'Lưu');
-  mount(h('section', { class: 'card' }, h('h2', {}, id ? 'Sửa thông tin ' + p.patient_id : 'Bệnh nhân mới'), f.el,
-    h('div', { class: 'row-actions', style: 'margin-top:12px' }, save, h('button', { onclick: () => go(id ? 'p/' + id : '') }, 'Huỷ'))));
+  mount(h('section', { class: 'card' }, h('h2', {}, id ? 'Sửa thông tin ' + p.patient_id : 'Bệnh nhân mới'),
+    h('div', { class: 'av-row' }, avBox,
+      h('div', {}, h('button', { type: 'button', onclick: () => avInput.click() }, p.avatar_id ? '📷 Đổi ảnh chân dung' : '📷 Chụp / chọn ảnh chân dung'),
+        h('div', { class: 'muted', style: 'margin-top:4px' }, 'Ảnh làm đại diện hồ sơ, tự thu nhỏ trước khi lưu')), avInput),
+    f.el,
+    h('div', { class: 'row-actions', style: 'margin-top:12px' }, save, h('button', { onclick: () => go(id ? 'p/' + id : 'patients') }, 'Huỷ'))));
   f.inputs.full_name.focus();
 }
 
@@ -505,13 +581,8 @@ async function pageVisitForm({ patientId, visitId }) {
     { name: 'treatment', label: 'Điều trị đã làm', type: 'textarea' },
     { name: 'plan', label: 'Kế hoạch tiếp', type: 'textarea' },
     { name: 'prescription', label: 'Đơn thuốc', type: 'textarea' },
-    { name: 'cost', label: 'Chi phí (VNĐ)', type: 'number', inputmode: 'numeric', min: 0 },
-    { name: 'paid', label: 'Đã thu (VNĐ)', type: 'number', inputmode: 'numeric', min: 0 },
     { name: 'notes', label: 'Ghi chú', type: 'textarea' },
   ], visit);
-  const debt = h('div', { class: 'muted' });
-  const updDebt = () => { const d = (Number(f.inputs.cost.value) || 0) - (Number(f.inputs.paid.value) || 0); debt.textContent = d ? 'Còn nợ: ' + fmtMoney(d) : ''; };
-  f.inputs.cost.addEventListener('input', updDebt); f.inputs.paid.addEventListener('input', updDebt); updDebt();
 
   const existing = h('div', {}, thumbGrid(images, () => go('v/' + visitId, false)));
 
@@ -567,7 +638,9 @@ async function pageVisitForm({ patientId, visitId }) {
   mount(
     h('div', { class: 'row-actions' }, h('button', { onclick: () => go('p/' + patientId) }, '← ' + patient.full_name)),
     patient.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + patient.allergies) : null,
-    h('section', { class: 'card' }, title, h('div', { class: 'muted' }, patient.full_name + ' · ' + patient.patient_id), f.el, debt),
+    h('section', { class: 'card' }, title,
+      h('div', { class: 'row-av', style: 'margin-bottom:8px' }, avatar(patient, 40), h('div', { class: 'row-main' }, h('b', {}, patient.full_name), h('div', { class: 'muted' }, patient.patient_id))),
+      f.el),
     h('section', { class: 'card' }, h('h3', {}, 'Ảnh chụp'), existing, uploader.el),
     apSection,
     h('div', { class: 'row-actions' }, save, h('button', { onclick: () => go('p/' + patientId) }, 'Huỷ'),

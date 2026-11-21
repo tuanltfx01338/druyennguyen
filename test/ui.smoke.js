@@ -61,7 +61,7 @@ const until = async (fn, ms = 4000) => {
 const btn = (d, text) => [...d.querySelectorAll('button')].find(b => b.textContent.includes(text));
 const set = (w, el, v) => { el.value = v; el.dispatchEvent(new w.Event('input')); };
 
-test('create patient → visit with 2 original photos (server-chunk fallback) → see thumbs, debt, allergy; search', async () => {
+test('create patient → visit with 2 original photos (server-chunk fallback) → see thumbs, allergy, no money; search', async () => {
   const server = loadServer();
   const { w, d, calls } = boot(server);
   await until(() => btn(d, '+ Bệnh nhân'));
@@ -76,9 +76,8 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
 
   btn(d, '+ Lần khám').click();
   await until(() => d.querySelector('[name=visit_date]'));
-  set(w, d.querySelector('[name=cost]'), '800000');
-  set(w, d.querySelector('[name=paid]'), '500000');
-  assert.match(d.body.textContent, /Còn nợ: 300\.000/);
+  assert.equal(d.querySelector('[name=cost]'), null); // no money fields
+  set(w, d.querySelector('[name=diagnosis]'), 'Viêm tuỷ R46');
 
   const big = new w.File([new Uint8Array(5 * 1024 * 1024 + 123)], 'IMG_big.jpg', { type: 'image/jpeg' });
   const small = new w.File([new Uint8Array(1000)], 'xray.png', { type: 'image/png' });
@@ -90,7 +89,8 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   btn(d, 'Lưu').click();
   await until(() => d.body.textContent.includes('Lịch sử khám (1)'), 10000);
   await until(() => d.querySelectorAll('.thumbs img').length === 2);
-  assert.match(d.body.textContent, /Tổng còn nợ: 300\.000/);
+  assert.ok(!/nợ|Chi phí|Đã thu/.test(d.getElementById('app').textContent));
+  assert.match(d.body.textContent, /Viêm tuỷ R46/);
   assert.ok(calls.filter(c => c === 'uploadChunk').length >= 4, 'big file sent in 2 MB chunks');
   const imgs = server.readActive_('Images');
   assert.equal(imgs.length, 2);
@@ -137,7 +137,7 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
 
 test('import wizard: preview shows counts, blocks on errors, commits', async () => {
   const fixture = [
-    ['BenhNhan', [['x'], ['STT *', '', 'Họ tên *'], [1, '', 'Lê Văn C', '', 1980], [2, '', 'Võ D']]],
+    ['BenhNhan', [['x'], ['STT *', '', 'Họ tên *', '', '', '', 'CCCD'], [1, '', 'Lê Văn C', '', 1980, 'Nam', '079080000123'], [2, '', 'Võ D']]],
     ['LanKham', [['x'], ['STT BN *', '', 'Ngày khám *'], [1, 'Lê Văn C', new Date(2023, 5, 1), 'Cạo vôi']]],
   ];
   const server = loadServer({ importFixture: () => JSON.parse(JSON.stringify(fixture), (k, v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v) : v)) });
@@ -156,30 +156,31 @@ test('import wizard: preview shows counts, blocks on errors, commits', async () 
   w.close();
 });
 
-test('dashboard is the landing page: stats, appointments, chart toggle, debtors, search jumps to list', async () => {
+test('dashboard is the landing page: stats, appointments, chart, missed appointments, search jumps to list', async () => {
   const server = loadServer();
   const pad = n => String(n).padStart(2, '0');
   const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
   const a = server.savePatient({ full_name: 'Đỗ Minh Khang', phone: '0901000001' });
   const b = server.savePatient({ full_name: 'Vũ Thu Hà' });
-  server.saveVisit({ patient_id: a, visit_date: today, reason: 'Đau răng', cost: 1000000, paid: 400000,
+  server.saveVisit({ patient_id: a, visit_date: today, reason: 'Đau răng',
     appointment: { appt_date: today, start_time: '09:00', duration_min: 45, title: 'Chữa tuỷ lần 2' } });
-  server.saveVisit({ patient_id: b, visit_date: today, cost: 200000, paid: 200000 });
+  server.saveVisit({ patient_id: b, visit_date: today });
+  const yest = server.listAppointments ? (() => { const x = new Date(Date.now() - 2 * 864e5); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`; })() : '';
+  server.saveAppointment({ patient_id: b, appt_date: yest, start_time: '10:00', duration_min: 30, title: 'Cạo vôi', status: 'no_show' });
   const { w, d } = boot(server);
-  await until(() => d.querySelectorAll('.stat').length === 6);
+  await until(() => d.querySelectorAll('.stat').length === 4);
   const stat = label => [...d.querySelectorAll('.stat')].find(x => x.textContent.includes(label)).querySelector('.stat-value').textContent;
   assert.equal(stat('Khám hôm nay'), '2');
   assert.equal(stat('Hẹn hôm nay'), '1');
-  assert.equal(stat('Đã thu tháng này'), '600k');
-  assert.equal(stat('Công nợ'), '600k');
   assert.equal(stat('Tổng bệnh nhân'), '2');
+  assert.match(d.body.textContent, /\+2 mới tháng này/);
+  assert.match(d.body.textContent, /Lỡ hẹn 30 ngày qua \(1\).*Vũ Thu Hà.*Cạo vôi/);
+  assert.ok(!/nợ|Đã thu|\d đ\b/.test(d.getElementById('app').textContent));
   assert.match(d.body.textContent, /Hôm nay09:00 Đỗ Minh Khang.*45 phút · Chữa tuỷ lần 2/);
   assert.equal(d.querySelectorAll('.chart .col').length, 6);
   assert.equal(d.querySelector('.chart .col-val').textContent, '2');
-  btn(d, 'Đã thu').click();
-  assert.equal(d.querySelector('.chart .col-val').textContent, '600k');
   d.querySelectorAll('.chart .col')[5].click();
-  assert.match(d.querySelector('.chart-cap').textContent, /600\.000 đ/);
+  assert.match(d.querySelector('.chart-cap').textContent, /2 lần khám/);
   const search = d.querySelector('input.search');
   search.value = 'vu thu';
   search.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter' }));
@@ -237,5 +238,43 @@ test('calendar: day/week/month views, overlap layout, tap slot → new appointme
   const saved = server.listAppointments(today, today).find(x => x.start_time === '14:00');
   assert.equal(saved.duration_min, 45);
   assert.equal(saved.patient_id, a);
+  w.close();
+});
+
+test('patient form: portrait avatar, CCCD (unique), several phones; avatar shows in search, picker, calendar', async () => {
+  const server = loadServer();
+  server.savePatient({ full_name: 'Người có sẵn', national_id: '079090000001' });
+  const { w, d } = boot(server);
+  await until(() => btn(d, '+ Bệnh nhân'));
+  btn(d, '+ Bệnh nhân').click();
+  await until(() => d.querySelector('[name=national_id]'));
+  set(w, d.querySelector('[name=full_name]'), 'Trịnh Bảo Ngọc');
+  set(w, d.querySelector('[name=national_id]'), '079090000001');   // duplicate
+  set(w, d.querySelector('.phones input'), '0903000111');
+  btn(d, '+ Thêm số điện thoại').click();
+  set(w, d.querySelectorAll('.phones input')[1], '0283 822 3344');
+  const av = d.querySelector('.av-row input[type=file]');
+  const png = new w.File([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], 'chan-dung.png', { type: 'image/png' });
+  Object.defineProperty(av, 'files', { value: [png], configurable: true });
+  av.dispatchEvent(new w.Event('change'));
+  await until(() => d.querySelector('.av-edit img'));
+  btn(d, 'Lưu').click();
+  await until(() => /đã thuộc hồ sơ/.test(d.getElementById('toast').textContent));
+  set(w, d.querySelector('[name=national_id]'), '079 090 000 002');
+  btn(d, 'Lưu').click();
+  await until(() => d.querySelector('.p-head .avatar img'));
+  assert.match(d.querySelector('.p-head').textContent, /CCCD 079090000002/);
+  assert.match(d.querySelector('.p-head').textContent, /0903000111 · 0283 822 3344/);
+  const p = server.searchPatients('ngoc')[0];
+  assert.ok(p.avatar_id);
+  assert.equal(server.__gas.DriveApp.getFileById(p.avatar_id).getName().startsWith('avatar_'), true);
+
+  btn(d, '+ Lịch hẹn').click();                       // picker preselected with avatar
+  await until(() => d.querySelector('.picked .avatar img'));
+  btn(d, 'Lịch hẹn').click();
+  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Bệnh nhân').click();
+  const q = await until(() => d.querySelector('input.search'));
+  set(w, q, '000002');                                  // search by CCCD
+  await until(() => d.querySelector('.list .item.row-av .avatar img'));
   w.close();
 });

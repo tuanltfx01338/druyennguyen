@@ -5,7 +5,7 @@ function getVisit(id) {
     v.images = readActive_('Images').filter(function (i) { return i.visit_id === id; }).map(publicImage_);
     v.appointment = linkedAppointment_(id);
     delete v._row;
-    return { visit: v, patient: { patient_id: p.patient_id, full_name: p.full_name, allergies: p.allergies } };
+    return { visit: v, patient: { patient_id: p.patient_id, full_name: p.full_name, allergies: p.allergies, avatar_id: p.avatar_id } };
   });
 }
 
@@ -70,19 +70,19 @@ function deleteVisit(id) {
 function searchVisitsByDate(from, to) {
   return api_('searchVisitsByDate', function () {
     if (!isValidDateStr(from) || !isValidDateStr(to)) throw new Error('Khoảng ngày không hợp lệ');
-    var names = {};
-    readActive_('Patients').forEach(function (p) { names[p.patient_id] = p.full_name; });
+    var pats = {};
+    readActive_('Patients').forEach(function (p) { pats[p.patient_id] = p; });
     return readActive_('Visits').filter(function (v) {
-      return names[v.patient_id] && v.visit_date >= from && v.visit_date <= to;
+      return pats[v.patient_id] && v.visit_date >= from && v.visit_date <= to;
     }).sort(function (a, b) { return String(b.visit_date).localeCompare(String(a.visit_date)); })
       .slice(0, 300).map(function (v) {
-        return { visit_id: v.visit_id, patient_id: v.patient_id, full_name: names[v.patient_id],
+        return { visit_id: v.visit_id, patient_id: v.patient_id, full_name: pats[v.patient_id].full_name, avatar_id: pats[v.patient_id].avatar_id,
           visit_date: v.visit_date, diagnosis: v.diagnosis, treatment: v.treatment };
       });
   });
 }
 
-/** Landing page: today's work, appointments, 6-month trend, debts. */
+/** Landing page: today's work, appointments, 6-month trend, missed appointments. */
 function getDashboard() {
   return api_('getDashboard', function () {
     return buildDashboard(readActive_('Patients'), readActive_('Visits'), today_(), readActive_('Appointments'));

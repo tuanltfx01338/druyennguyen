@@ -29,13 +29,17 @@ function importPreview(fileName, b64) {
     var bn, lk;
     try {
       var ss = SpreadsheetApp.openById(tmp.id);
-      bn = readTemplateSheet_(ss, 'BenhNhan', [[0, 'STT'], [2, 'Họ tên']]);
+      bn = readTemplateSheet_(ss, 'BenhNhan', [[0, 'STT'], [2, 'Họ tên'], [6, 'CCCD']]);
       lk = readTemplateSheet_(ss, 'LanKham', [[0, 'STT BN'], [2, 'Ngày khám']]);
     } finally {
       DriveApp.getFileById(tmp.id).setTrashed(true);
     }
-    var existing = readAll_('Patients').map(function (p) { return p.import_stt; }).filter(function (s) { return s !== ''; });
-    var r = parseImport(bn, lk, { currentYear: new Date().getFullYear(), existingStts: existing });
+    var all = readActive_('Patients');
+    var existing = all.map(function (p) { return p.import_stt; }).filter(function (s) { return s !== ''; });
+    var ids = all.filter(function (p) { return p.national_id; }).map(function (p) {
+      return { national_id: String(p.national_id), patient_id: p.patient_id, import_stt: p.import_stt === '' ? null : Number(p.import_stt) };
+    });
+    var r = parseImport(bn, lk, { currentYear: new Date().getFullYear(), existingStts: existing, existingNationalIds: ids });
     var runId = Utilities.getUuid();
     systemFolder_().createFile('import_' + runId + '.json', JSON.stringify(r.patients), MimeType.PLAIN_TEXT);
     var visits = 0;
@@ -67,6 +71,11 @@ function importCommit(runId, offset) {
       var existing = {};
       readAll_('Patients').forEach(function (p) { if (p.import_stt !== '') existing[Number(p.import_stt)] = true; });
       var todo = batch.filter(function (p) { return !existing[p.import_stt]; });
+      var taken = {};
+      readActive_('Patients').forEach(function (p) { if (p.national_id) taken[p.national_id] = p.patient_id; });
+      todo.forEach(function (p) {
+        if (p.national_id && taken[p.national_id]) throw new Error('CCCD ' + p.national_id + ' (STT ' + p.import_stt + ') đã có ở hồ sơ ' + taken[p.national_id] + ' — xem trước lại');
+      });
       skipped = batch.length - todo.length;
       var byYear = {};
       todo.forEach(function (p) { (byYear[p.year] = byYear[p.year] || []).push(p); });

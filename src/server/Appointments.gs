@@ -52,6 +52,7 @@ function listAppointments(from, to) {
       o.full_name = pats[a.patient_id].full_name;
       o.phone = pats[a.patient_id].phone;
       o.allergies = pats[a.patient_id].allergies;
+      o.avatar_id = pats[a.patient_id].avatar_id;
       return o;
     });
   });
@@ -61,7 +62,7 @@ function getAppointment(id) {
   return api_('getAppointment', function () {
     var a = mustFindActive_('Appointments', 'appt_id', id, 'Lịch hẹn');
     var p = mustFindActive_('Patients', 'patient_id', a.patient_id, 'Bệnh nhân');
-    return { appointment: publicAppointment_(a), patient: { patient_id: p.patient_id, full_name: p.full_name, phone: p.phone, allergies: p.allergies } };
+    return { appointment: publicAppointment_(a), patient: { patient_id: p.patient_id, full_name: p.full_name, phone: p.phone, allergies: p.allergies, avatar_id: p.avatar_id } };
   });
 }
 

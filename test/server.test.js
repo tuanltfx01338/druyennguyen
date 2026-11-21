@@ -26,6 +26,34 @@ test('setup is idempotent and creates all tables', () => {
   assert.equal(sheet('Patients').getLastRow(), 1);
 });
 
+test('patients: CCCD unique, many phones, search by CCCD/any phone, avatar', () => {
+  const { s, gas } = load();
+  const a = s.savePatient({ full_name: 'Lý Quốc Quân', national_id: '079 090 012 345', phone: '0903111222, 0283 8123 456' });
+  assert.equal(s.getPatient(a).patient.national_id, '079090012345');
+  assert.throws(() => s.savePatient({ full_name: 'Người khác', national_id: '079090012345' }), new RegExp('đã thuộc hồ sơ ' + a));
+  s.savePatient({ patient_id: a, full_name: 'Lý Quốc Quân', national_id: '079090012345' }); // updating self is fine
+  const b = s.savePatient({ full_name: 'Trẻ em chưa có CCCD' });                           // CCCD optional
+  assert.ok(b);
+  assert.deepEqual(plain(s.searchPatients('012345')).map(p => p.patient_id), [a]);
+  assert.deepEqual(plain(s.searchPatients('8123')).map(p => p.patient_id), []); // phone was removed by the update above
+  s.savePatient({ patient_id: a, full_name: 'Lý Quốc Quân', national_id: '079090012345', phone: '0903111222, 0283 8123 456' });
+  assert.deepEqual(plain(s.searchPatients('81234')).map(p => p.patient_id), [a]);
+
+  const ctx = s.getAvatarUploadContext(a);
+  const F = gas.__File;
+  const pic1 = new F('avatar.jpg', gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 50000);
+  s.setPatientAvatar(a, pic1.id);
+  assert.equal(plain(s.searchPatients('quan'))[0].avatar_id, pic1.id);
+  const pic2 = new F('avatar2.jpg', gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 50000);
+  s.setPatientAvatar(a, pic2.id);
+  assert.ok(pic1.trashed); // old portrait trashed
+  const stray = new F('x.jpg', gas.__root, 'image/jpeg', '', 1);
+  assert.throws(() => s.setPatientAvatar(a, stray.id), /không nằm trong/);
+  const today = s.today_();
+  s.saveAppointment({ patient_id: a, appt_date: today, start_time: '09:00', duration_min: 30 });
+  assert.equal(s.listAppointments(today, today)[0].avatar_id, pic2.id);
+});
+
 test('patients: create, id sequence, accent-less search, phone, formula injection, update, soft delete', () => {
   const { s, sheet } = load();
   const a = s.savePatient({ full_name: 'Nguyễn Văn An', phone: '0903123456', dob: '1985-03-12', allergies: 'Penicillin' });
@@ -53,13 +81,12 @@ test('visits: save, debt, date search, upcoming appointments, delete', () => {
   const { s } = load();
   const p = s.savePatient({ full_name: 'Lê C' });
   const today = s.today_();
-  const v1 = s.saveVisit({ patient_id: p, visit_date: '2026-01-05', cost: '800.000', paid: 500000, teeth: '46' });
+  const v1 = s.saveVisit({ patient_id: p, visit_date: '2026-01-05', teeth: '46' });
   const v2 = s.saveVisit({ patient_id: p, visit_date: today, plan: 'Làm sứ',
     appointment: { appt_date: today, start_time: '15:00', duration_min: 60, title: 'Làm sứ' } });
   const g = s.getPatient(p);
   assert.equal(g.visits.length, 2);
   assert.equal(g.visits[0].visit_id, v2); // newest first
-  assert.equal(g.total_debt, 300000);
   assert.deepEqual(plain(s.searchVisitsByDate('2026-01-01', '2026-01-31')).map(v => v.visit_id), [v1]);
   const up = plain(s.getDashboard().upcoming);
   assert.equal(up.length, 1);
@@ -131,14 +158,14 @@ test('images: lazy folder, same-day folder dedupe, register only files inside th
 });
 
 test('import: preview (dry-run, no writes) → commit in batches → re-run creates no duplicates → images move', () => {
-  const hdrBN = ['STT *', 'Mã BN (để trống)', 'Họ tên *', 'Ngày sinh'];
+  const hdrBN = ['STT *', 'Mã BN (để trống)', 'Họ tên *', 'Ngày sinh', 'Năm sinh', 'Giới tính', 'CCCD'];
   const hdrLK = ['STT BN *', 'Họ tên (tự hiện)', 'Ngày khám *'];
   const bnRows = [['DANH SÁCH'], hdrBN,
-    [1, '', 'Nguyễn Văn An', new Date(1985, 2, 12), '', 'Nam', 903123456, '', '', '', '', '0001_Nguyen Van An', '', 2],
-    [2, '', 'Trần B', '', 1970, 'Nữ', '', '', '', '', '', '', '', 0]];
+    [1, '', 'Nguyễn Văn An', new Date(1985, 2, 12), '', 'Nam', '079085001234', 903123456, '', '', '', '', '0001_Nguyen Van An', '', 2],
+    [2, '', 'Trần B', '', 1970, 'Nữ', '', '', '', '', '', '', '', '', 0]];
   const lkRows = [['NHẬT KÝ'], hdrLK,
-    [1, 'Nguyễn Văn An', new Date(2019, 0, 2), 'Đau', '', '46', '', '', '', 800000, 500000, 300000, '', ''],
-    [1, 'Nguyễn Văn An', new Date(2024, 4, 20), '', '', '', '', 'Làm sứ', '', '', '', '', new Date(2024, 4, 27), '']];
+    [1, 'Nguyễn Văn An', new Date(2019, 0, 2), 'Đau', '', '46', '', '', '', '', ''],
+    [1, 'Nguyễn Văn An', new Date(2024, 4, 20), '', '', '', '', 'Làm sứ', '', new Date(2024, 4, 27), '']];
   const { s, gas, sheet } = load({ importFixture: () => [['BenhNhan', bnRows.map(r => r.slice())], ['LanKham', lkRows.map(r => r.slice())]] });
 
   const pv = s.importPreview('x.xlsx', Buffer.from('xlsx').toString('base64'));
@@ -153,6 +180,7 @@ test('import: preview (dry-run, no writes) → commit in batches → re-run crea
   const an = plain(s.searchPatients('nguyen van an'))[0];
   assert.equal(an.patient_id, 'NK19-0001'); // year of first visit
   assert.equal(an.phone, '0903123456');
+  assert.equal(an.national_id, '079085001234');
   assert.equal(plain(s.searchPatients('tran b'))[0].patient_id, `NK${yy}-0001`); // no visits → current year
   assert.equal(s.getPatient(an.patient_id).visits.length, 2);
   const imported = plain(s.listAppointments('2024-01-01', '2024-12-31'));
@@ -191,12 +219,12 @@ test('import: preview (dry-run, no writes) → commit in batches → re-run crea
 });
 
 test('import: template errors are reported per row and block nothing silently', () => {
-  const bnRows = [['x'], ['STT *', '', 'Họ tên *'], [1, '', '', '', '', 'X'], [1, '', 'Dup']];
+  const bnRows = [['x'], ['STT *', '', 'Họ tên *', '', '', '', 'CCCD'], [1, '', '', '', '', 'X'], [1, '', 'Dup']];
   const lkRows = [['x'], ['STT BN *', '', 'Ngày khám *'], [5, '', '2024-01-01']];
   const { s } = load({ importFixture: () => [['BenhNhan', bnRows], ['LanKham', lkRows]] });
   const pv = s.importPreview('x.xlsx', '');
   assert.ok(pv.errorCount >= 3);
-  const wrong = load({ importFixture: () => [['BenhNhan', [['x'], ['Tên', '', '']]], ['LanKham', lkRows]] });
+  const wrong = load({ importFixture: () => [['BenhNhan', [['x'], ['STT *', '', 'Họ tên *', '', '', '', 'SĐT']]], ['LanKham', lkRows]] }); // old template
   assert.throws(() => wrong.s.importPreview('x.xlsx', ''), /không đúng mẫu/);
 });
 

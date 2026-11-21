@@ -38,16 +38,15 @@ test('sanitizeCell blocks formula injection', () => {
   assert.equal(L.sanitizeCell(5), 5);
 });
 
-test('phone & money', () => {
+test('phones (many) & CCCD', () => {
   assert.equal(L.normalizePhone(903123456), '0903123456');
-  assert.equal(L.normalizePhone('0903123456'), '0903123456');
-  assert.equal(L.parseMoney('800.000đ'), 800000);
-  assert.equal(L.parseMoney(500000), 500000);
-  assert.equal(L.parseMoney(''), '');
-  assert.equal(L.parseMoney('abc'), null);
-  assert.equal(L.parseMoney(-1), null);
-  assert.equal(L.debtOf(800000, 500000), 300000);
-  assert.equal(L.debtOf('', ''), 0);
+  assert.equal(L.normalizePhones('0903123456; 912345678 / 0903123456'), '0903123456, 0912345678');
+  assert.equal(L.normalizePhones(903123456), '0903123456');
+  assert.equal(L.normalizePhones(''), '');
+  assert.equal(L.normalizeNationalId('079 085 001 234'), '079085001234');
+  assert.equal(L.normalizeNationalId(79085001234), '079085001234'); // Excel dropped the leading 0
+  assert.equal(L.normalizeNationalId('12345'), null);
+  assert.equal(L.normalizeNationalId(''), '');
 });
 
 test('dedupeName', () => {
@@ -56,48 +55,64 @@ test('dedupeName', () => {
 });
 
 test('validatePatient / validateVisit', () => {
-  const p = L.validatePatient({ full_name: ' Lê B ', dob: '01/02/1990', gender: 'Nữ' }, 2026);
+  const p = L.validatePatient({ full_name: ' Lê B ', dob: '01/02/1990', gender: 'Nữ', national_id: '079190000001', phone: '0901, 0902' }, 2026);
   assert.equal(p.errors.length, 0);
   assert.equal(p.value.birth_year, 1990);
   assert.equal(p.value.full_name, 'Lê B');
+  assert.equal(p.value.national_id, '079190000001');
+  assert.ok(L.validatePatient({ full_name: 'A', national_id: '123' }, 2026).errors.includes('Số CCCD phải gồm đúng 12 chữ số'));
   assert.ok(L.validatePatient({ full_name: '', gender: 'X' }, 2026).errors.length === 2);
   assert.ok(L.validatePatient({ full_name: 'A', birth_year: 3000 }, 2026).errors.length === 1);
 
-  const v = L.validateVisit({ visit_date: '2026-11-21', cost: '800.000', paid: 500000 });
+  const v = L.validateVisit({ visit_date: '2026-11-21', diagnosis: 'Sâu R16', cost: 800000 });
   assert.equal(v.errors.length, 0);
-  assert.equal(v.value.cost, 800000);
+  assert.equal(v.value.cost, undefined); // no money fields kept
   assert.ok(L.validateVisit({ visit_date: '' }).errors.includes('Ngày khám thiếu hoặc không hợp lệ'));
 });
 
-test('parseImport: happy path, example rows, errors, dedupe, year from first visit', () => {
+test('parseImport: happy path, example rows, errors, dedupe, CCCD unique, year from first visit', () => {
+  // A STT, B Ma, C Ten, D NgaySinh, E NamSinh, F Gioi, G CCCD, H SDT, I DiaChi, J DiUng, K Benh, L Thuoc, M ThuMuc, N GhiChu
   const bn = [
-    [1, '', 'Nguyễn Văn An', '1985-03-12', '', 'Nam', 903123456, 'HCM', '', '', '', '0001_Nguyen Van An', ''],
-    [2, '', 'Trần B', '', 1970, 'Nữ', '', '', '', '', '', '', ''],
-    [3, '', 'Đã import', '', '', '', '', '', '', '', '', '', ''],
-    [99, '', 'Ví dụ', '', '', '', '', '', '', '', '', '', 'VÍ DỤ – xoá dòng này'],
-    ['', '', '', '', '', '', '', '', '', '', '', '', ''],
-    [2, '', 'Trùng', '', '', '', '', '', '', '', '', '', ''],
+    [1, '', 'Nguyễn Văn An', '1985-03-12', '', 'Nam', '079085001234', 903123456, 'HCM', '', '', '', '0001_Nguyen Van An', ''],
+    [2, '', 'Trần B', '', 1970, 'Nữ', '', '0901; 0902', '', '', '', '', '', ''],
+    [3, '', 'Đã import', '', '', '', '', '', '', '', '', '', '', ''],
+    [99, '', 'Ví dụ', '', '', '', '', '', '', '', '', '', '', 'VÍ DỤ – xoá dòng này'],
+    ['', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    [2, '', 'Trùng', '', '', '', '', '', '', '', '', '', '', ''],
+    [4, '', 'Trùng CCCD trong file', '', '', '', '079085001234', '', '', '', '', '', '', ''],
+    [5, '', 'Trùng CCCD hồ sơ cũ', '', '', '', '001200000009', '', '', '', '', '', '', ''],
   ];
+  // A STT BN, B auto, C NgayKham, D LyDo, E ChanDoan, F Rang, G DieuTri, H KeHoach, I DonThuoc, J HenTaiKham, K GhiChu
   const lk = [
-    [1, 'auto', '2024-05-20', 'Đau', '', '46', '', '', '', 800000, 500000, 300000, '', '', ''],
-    [1, 'auto', '2019-01-02', '', '', '', '', '', '', '', '', '', '', ''],
-    [7, 'x', '2024-01-01', '', '', '', '', '', '', '', '', '', '', ''],
-    [2, 'x', '', '', '', '', '', '', '', '', '', '', '', ''],
+    [1, 'auto', '2024-05-20', 'Đau', '', '46', '', 'Làm sứ', '', '2024-05-27', ''],
+    [1, 'auto', '2019-01-02', '', '', '', '', '', '', '', ''],
+    [7, 'x', '2024-01-01', '', '', '', '', '', '', '', ''],
+    [2, 'x', '', '', '', '', '', '', '', '', ''],
   ];
-  const r = L.parseImport(bn, lk, { currentYear: 2026, existingStts: [3] });
-  assert.equal(r.patients.length, 3);
+  const r = L.parseImport(bn, lk, { currentYear: 2026, existingStts: [3],
+    existingNationalIds: [{ national_id: '001200000009', patient_id: 'NK25-0001', import_stt: null }] });
+  assert.equal(r.patients.length, 5);
   assert.equal(r.warnings.length, 1);
   assert.equal(r.skippedExisting, 1);
   const p1 = r.patients[0];
   assert.equal(p1.phone, '0903123456');
+  assert.equal(p1.national_id, '079085001234');
+  assert.equal(r.patients[1].phone, '0901, 0902');
   assert.equal(p1.visits.length, 2);
+  assert.equal(p1.visits[0].next_appointment, '2024-05-27');
   assert.equal(p1.year, 2019);
   assert.equal(r.patients[1].year, 2026); // no valid visits → current year
   const msgs = r.errors.map(e => `${e.sheet}:${e.row}:${e.message}`);
   assert.ok(msgs.some(m => m.startsWith('BenhNhan:8:') && m.includes('trùng')));
+  assert.ok(msgs.some(m => m.startsWith('BenhNhan:9:') && m.includes('trùng với dòng 3')));
+  assert.ok(msgs.some(m => m.startsWith('BenhNhan:10:') && m.includes('trùng với hồ sơ NK25-0001')));
   assert.ok(msgs.some(m => m.startsWith('LanKham:5:') && m.includes('không có')));
   assert.ok(msgs.some(m => m.startsWith('LanKham:6:') && m.includes('Ngày khám')));
-  assert.equal(r.errors.length, 3);
+  assert.equal(r.errors.length, 5);
+  // re-running the same file: CCCD owned by the same STT is not a duplicate
+  const again = L.parseImport(bn.slice(0, 1), [], { currentYear: 2026, existingStts: [1],
+    existingNationalIds: [{ national_id: '079085001234', patient_id: 'NK19-0001', import_stt: 1 }] });
+  assert.equal(again.errors.length, 0);
 });
 
 test('lastMonths / addDays', () => {
@@ -133,15 +148,15 @@ test('appointments: time, validation, conflicts, ordering', () => {
   assert.deepEqual(L.sortAppointments(list.slice().reverse()).map(x => x.appt_id), [4, 1, 3, 2, 5]);
 });
 
-test('buildDashboard', () => {
-  const P = [{ patient_id: 'A', full_name: 'An', phone: '1' }, { patient_id: 'B', full_name: 'Bình', phone: '2' }];
+test('buildDashboard (no money): counts, appointments, missed', () => {
+  const P = [{ patient_id: 'A', full_name: 'An', phone: '1', avatar_id: 'img1', created_at: '2026-11-02 10:00:00' },
+    { patient_id: 'B', full_name: 'Bình', phone: '2', created_at: '2025-03-01 10:00:00' }];
   const V = [
-    { visit_id: 1, patient_id: 'A', visit_date: '2026-11-21', cost: 1000, paid: 400, reason: 'Đau', source: 'app' },
-    { visit_id: 2, patient_id: 'A', visit_date: '2026-10-01', cost: 500, paid: 500, source: 'app' },
-    { visit_id: 3, patient_id: 'B', visit_date: '2026-06-02', cost: 300, paid: 0, source: 'import' },
+    { visit_id: 1, patient_id: 'A', visit_date: '2026-11-21', reason: 'Đau', source: 'app' },
+    { visit_id: 2, patient_id: 'A', visit_date: '2026-10-01', source: 'app' },
+    { visit_id: 3, patient_id: 'B', visit_date: '2026-06-02', source: 'import' },
     { visit_id: 4, patient_id: 'B', visit_date: '2026-11-21', source: 'import-images' }, // photo container, not a visit
-    { visit_id: 5, patient_id: 'GONE', visit_date: '2026-11-21', cost: 9, paid: 0 },      // deleted patient
-    { visit_id: 6, patient_id: 'B', visit_date: '2025-01-01', cost: 100, paid: 0 },       // outside 6 months, still debt
+    { visit_id: 5, patient_id: 'GONE', visit_date: '2026-11-21' },                       // deleted patient
   ];
   const A = [
     { appt_id: 'x1', patient_id: 'A', appt_date: '2026-11-21', start_time: '14:00', duration_min: 30, title: 'Lắp sứ', status: 'scheduled' },
@@ -150,14 +165,17 @@ test('buildDashboard', () => {
     { appt_id: 'x4', patient_id: 'B', appt_date: '2026-11-22', start_time: '09:00', duration_min: 30, status: 'cancelled' },
     { appt_id: 'x5', patient_id: 'B', appt_date: '2026-11-29', start_time: '09:00', duration_min: 30, status: 'scheduled' }, // > 7 days
     { appt_id: 'x6', patient_id: 'GONE', appt_date: '2026-11-21', start_time: '09:00', duration_min: 30, status: 'scheduled' },
+    { appt_id: 'm1', patient_id: 'B', appt_date: '2026-11-10', start_time: '10:00', duration_min: 30, status: 'no_show' },
+    { appt_id: 'm2', patient_id: 'A', appt_date: '2026-11-18', start_time: '10:00', duration_min: 30, status: 'no_show' },
+    { appt_id: 'm3', patient_id: 'A', appt_date: '2026-09-01', start_time: '10:00', duration_min: 30, status: 'no_show' },   // > 30 days
   ];
   const d = JSON.parse(JSON.stringify(L.buildDashboard(P, V, '2026-11-21', A)));
   assert.deepEqual(d.monthly.map(m => m.month), ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11']);
   assert.deepEqual(d.monthly.map(m => m.visits), [1, 0, 0, 0, 1, 1]);
-  assert.equal(d.monthly[5].paid, 400);
-  assert.deepEqual(d.stats, { patients: 2, visitsToday: 1, visitsMonth: 1, paidMonth: 400, apptToday: 2, appt7: 3, totalDebt: 1000, debtorCount: 2 });
+  assert.deepEqual(d.stats, { patients: 2, newPatientsMonth: 1, visitsToday: 1, visitsMonth: 1, apptToday: 2, appt7: 3, missed30: 2 });
   assert.deepEqual(d.upcoming.map(u => u.appt_id), ['x2', 'x1', 'x3']);
-  assert.equal(d.upcoming[1].full_name, 'An');
-  assert.deepEqual(d.debtors.map(x => [x.patient_id, x.debt]), [['A', 600], ['B', 400]]);
+  assert.equal(d.upcoming[1].avatar_id, 'img1');
+  assert.deepEqual(d.missed.map(u => u.appt_id), ['m2', 'm1']); // most recent first
   assert.deepEqual(d.todayVisits.map(x => x.visit_id), [1]);
+  assert.ok(!JSON.stringify(d).match(/paid|debt|cost/));
 });

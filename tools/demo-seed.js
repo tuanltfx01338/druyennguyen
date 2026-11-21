@@ -5,12 +5,12 @@
   const day = off => { const d = new Date(Date.now() + off * 864e5); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
   const fixture = () => [
-    ['BenhNhan', [['DANH SÁCH'], ['STT *', 'Mã BN (để trống)', 'Họ tên *', 'Ngày sinh'],
-      [6, '', 'Đặng Văn Khoa', new Date(1979, 6, 2), '', 'Nam', 912345678, 'Q.3, TP.HCM', '', '', '', '0006_Dang Van Khoa', ''],
-      [7, '', 'Bùi Ngọc Lan', '', 1992, 'Nữ', '0938000111', '', 'Lidocaine', '', '', '', '']]],
+    ['BenhNhan', [['DANH SÁCH'], ['STT *', 'Mã BN (để trống)', 'Họ tên *', 'Ngày sinh', 'Năm sinh', 'Giới tính', 'CCCD', 'SĐT'],
+      [6, '', 'Đặng Văn Khoa', new Date(1979, 6, 2), '', 'Nam', '079079123456', 912345678, 'Q.3, TP.HCM', '', '', '', '0006_Dang Van Khoa', ''],
+      [7, '', 'Bùi Ngọc Lan', '', 1992, 'Nữ', '079192654321', '0938000111, 0908000222', '', 'Lidocaine', '', '', '', '']]],
     ['LanKham', [['NHẬT KÝ'], ['STT BN *', 'Họ tên (tự hiện)', 'Ngày khám *'],
-      [6, '', new Date(2022, 2, 14), 'Răng khôn mọc lệch', 'R38 mọc lệch gần', '38', 'Nhổ R38', '', 'Amoxicillin 500mg', 1500000, 1500000, '', '', ''],
-      [7, '', new Date(2024, 8, 9), 'Cạo vôi định kỳ', 'Viêm nướu nhẹ', '', 'Cạo vôi, đánh bóng', 'Tái khám 6 tháng', '', 300000, 300000, '', '', '']]],
+      [6, '', new Date(2022, 2, 14), 'Răng khôn mọc lệch', 'R38 mọc lệch gần', '38', 'Nhổ R38', '', 'Amoxicillin 500mg', '', ''],
+      [7, '', new Date(2024, 8, 9), 'Cạo vôi định kỳ', 'Viêm nướu nhẹ', '', 'Cạo vôi, đánh bóng', 'Tái khám 6 tháng', '', new Date(2025, 2, 9), '']]],
   ];
   const gas = createGas({ importFixture: fixture });
   const S = window.__SERVER(gas);
@@ -46,57 +46,76 @@
     });
     S.registerImages(visitId, files);
   };
+  // Fictional portrait: head-and-shoulders silhouette on a soft background.
+  const BG = ['#cfe8e5', '#d7dcf2', '#f2e0d5', '#d9ecd0', '#f3d9df', '#e5e0f0'];
+  const SKIN = ['#f1c9a5', '#e0ac85', '#c98e66', '#f5d6bc'];
+  const HAIR = ['#2b2118', '#3d2b1f', '#1c1c1c', '#5a3e2b', '#8d8d8d'];
+  const portrait = (female, i) => new TextEncoder().encode(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><rect width="400" height="400" fill="${BG[i % BG.length]}"/>` +
+    `<path d="M60 400c10-90 70-130 140-130s130 40 140 130z" fill="${['#00897b', '#5c6bc0', '#8d6e63', '#455a64'][i % 4]}"/>` +
+    `<rect x="172" y="230" width="56" height="50" fill="${SKIN[i % SKIN.length]}"/>` +
+    (female ? `<path d="M110 200c0-90 40-130 90-130s90 40 90 130v80h-40v-90H150v90h-40z" fill="${HAIR[i % HAIR.length]}"/>` : '') +
+    `<ellipse cx="200" cy="170" rx="62" ry="74" fill="${SKIN[i % SKIN.length]}"/>` +
+    `<path d="M138 150c0-50 30-72 62-72s62 22 62 72c-20-22-40-28-62-28s-42 6-62 28z" fill="${HAIR[i % HAIR.length]}"/>` +
+    `<circle cx="178" cy="172" r="5" fill="#333"/><circle cx="222" cy="172" r="5" fill="#333"/><path d="M182 205q18 12 36 0" stroke="#a0522d" stroke-width="4" fill="none"/></svg>`);
+  let pNo = 0;
+  const cccd = (by, female) => '079' + (by >= 2000 ? (female ? 3 : 2) : (female ? 1 : 0)) + String(by).slice(-2) + String(100000 + Math.floor(rnd() * 899999));
+
   // Patient created "in" a given year → code NKyy-nnnn of that year (as the real app would have produced then).
   const addPatient = (d, year) => {
     const id = S.reserveIds_(year, 1)[0];
     S.appendRows_('Patients', [Object.assign({ gender: '', phone: '', address: '', allergies: '', systemic_diseases: '', current_meds: '', notes: '', dob: '' }, d, {
       patient_id: id, name_search: S.normalizeText(d.full_name), birth_year: d.dob ? Number(d.dob.slice(0, 4)) : (d.birth_year || ''),
-      folder_id: S.createPatientFolder_(id, d.full_name).getId(), created_at: S.now_(), updated_at: S.now_(), deleted: false })]);
+      folder_id: S.createPatientFolder_(id, d.full_name).getId(), created_at: d.created_at || `${year}-${pad(1 + Math.floor(rnd() * (year === thisYear ? new Date().getMonth() + 1 : 12)))}-01 09:00:00`, updated_at: S.now_(), deleted: false })]);
+    if (d.photo === true || chance(0.75)) {
+      const ctx = S.getAvatarUploadContext(id);
+      const f = new gas.__File(`avatar_${id}.svg`, gas.DriveApp.getFolderById(ctx.folderId), 'image/svg+xml', '', undefined, portrait(d.gender === 'Nữ', pNo++));
+      S.setPatientAvatar(id, f.id);
+    }
     return id;
   };
 
   const FDI = [11, 12, 13, 14, 15, 16, 17, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 41, 42, 43, 44, 45, 46, 47];
   const PROCS = [
-    t => ({ reason: 'Cạo vôi định kỳ', diagnosis: 'Viêm nướu nhẹ, vôi răng độ 2', treatment: 'Cạo vôi, đánh bóng', plan: 'Tái khám 6 tháng', cost: 300000, imgs: [] }),
-    t => ({ reason: 'Ê buốt khi ăn ngọt', diagnosis: `Sâu ngà R${t}`, teeth: String(t), treatment: `Trám composite R${t}`, cost: 400000, imgs: ['truoc', 'sau'] }),
-    t => ({ reason: 'Đau nhức về đêm', diagnosis: `Viêm tuỷ không hồi phục R${t}`, teeth: String(t), treatment: `Lấy tuỷ R${t}, trám tạm`, plan: 'Chữa tuỷ lần 2', prescription: 'Paracetamol 500mg x 10v', cost: 1500000, imgs: ['xquang'] }),
-    t => { const k = pick([38, 48]); return { reason: 'Răng khôn mọc lệch', diagnosis: `R${k} mọc lệch gần, viêm lợi trùm`, teeth: String(k), treatment: `Tiểu phẫu nhổ R${k}`, plan: 'Cắt chỉ sau 7 ngày', prescription: 'Amoxicillin 500mg x 15v; Paracetamol 500mg x 10v', cost: 2000000, imgs: ['xquang', 'khac'] }; },
-    t => ({ reason: 'Mất răng, muốn trồng lại', diagnosis: `Mất R${t}`, teeth: String(t), treatment: `Cấy implant R${t} giai đoạn 1`, plan: 'Gắn mão sau 3 tháng', prescription: 'Amoxicillin 500mg x 15v', cost: 15000000, imgs: ['xquang', 'truoc'] }),
-    t => ({ reason: 'Răng ố vàng', diagnosis: 'Nhiễm màu ngoại sinh', treatment: 'Tẩy trắng tại phòng khám', cost: 2500000, imgs: ['truoc', 'sau'] }),
-    t => ({ reason: 'Niềng răng — tái khám', diagnosis: 'Sai khớp cắn loại II', treatment: 'Thay dây cung, chỉnh thun', plan: 'Tái khám 4 tuần', cost: 500000, imgs: ['khac', 'khac'] }),
-    t => ({ reason: 'Bọc răng sứ', diagnosis: `R${t} vỡ lớn sau chữa tuỷ`, teeth: String(t), treatment: 'Mài cùi, lấy dấu, gắn sứ tạm', plan: 'Gắn sứ chính thức sau 5 ngày', cost: 4000000, imgs: ['truoc', 'sau', 'xquang'] }),
+    t => ({ reason: 'Cạo vôi định kỳ', diagnosis: 'Viêm nướu nhẹ, vôi răng độ 2', treatment: 'Cạo vôi, đánh bóng', plan: 'Tái khám 6 tháng', imgs: [] }),
+    t => ({ reason: 'Ê buốt khi ăn ngọt', diagnosis: `Sâu ngà R${t}`, teeth: String(t), treatment: `Trám composite R${t}`, imgs: ['truoc', 'sau'] }),
+    t => ({ reason: 'Đau nhức về đêm', diagnosis: `Viêm tuỷ không hồi phục R${t}`, teeth: String(t), treatment: `Lấy tuỷ R${t}, trám tạm`, plan: 'Chữa tuỷ lần 2', prescription: 'Paracetamol 500mg x 10v', imgs: ['xquang'] }),
+    t => { const k = pick([38, 48]); return { reason: 'Răng khôn mọc lệch', diagnosis: `R${k} mọc lệch gần, viêm lợi trùm`, teeth: String(k), treatment: `Tiểu phẫu nhổ R${k}`, plan: 'Cắt chỉ sau 7 ngày', prescription: 'Amoxicillin 500mg x 15v; Paracetamol 500mg x 10v', imgs: ['xquang', 'khac'] }; },
+    t => ({ reason: 'Mất răng, muốn trồng lại', diagnosis: `Mất R${t}`, teeth: String(t), treatment: `Cấy implant R${t} giai đoạn 1`, plan: 'Gắn mão sau 3 tháng', prescription: 'Amoxicillin 500mg x 15v', imgs: ['xquang', 'truoc'] }),
+    t => ({ reason: 'Răng ố vàng', diagnosis: 'Nhiễm màu ngoại sinh', treatment: 'Tẩy trắng tại phòng khám', imgs: ['truoc', 'sau'] }),
+    t => ({ reason: 'Niềng răng — tái khám', diagnosis: 'Sai khớp cắn loại II', treatment: 'Thay dây cung, chỉnh thun', plan: 'Tái khám 4 tuần', imgs: ['khac', 'khac'] }),
+    t => ({ reason: 'Bọc răng sứ', diagnosis: `R${t} vỡ lớn sau chữa tuỷ`, teeth: String(t), treatment: 'Mài cùi, lấy dấu, gắn sứ tạm', plan: 'Gắn sứ chính thức sau 5 ngày', imgs: ['truoc', 'sau', 'xquang'] }),
   ];
-  const KID_PROC = () => { const t = pick([54, 55, 64, 65, 74, 75, 84, 85]); return { reason: 'Sâu răng sữa', diagnosis: `Sâu R${t}`, teeth: String(t), treatment: 'Trám GIC', cost: 300000, imgs: ['truoc'] }; };
+  const KID_PROC = () => { const t = pick([54, 55, 64, 65, 74, 75, 84, 85]); return { reason: 'Sâu răng sữa', diagnosis: `Sâu R${t}`, teeth: String(t), treatment: 'Trám GIC', imgs: ['truoc'] }; };
 
   const DUR = [15, 30, 30, 45, 60, 60, 90, 120];
   const randTime = () => minToT(8 * 60 + 15 * Math.floor(rnd() * 44)); // 08:00–18:45
   const minToT = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
   const addVisit = (pid, date, proc, opts = {}) => {
-    const debt = chance(0.2) ? Math.round(proc.cost * pick([0.3, 0.5]) / 1000) * 1000 : 0;
     const next = opts.next_appointment;
     delete opts.next_appointment;
     const appointment = next ? { appt_date: next, start_time: opts.next_time || randTime(), duration_min: opts.next_dur || pick(DUR), title: proc.plan || 'Tái khám' } : null;
-    const vid = S.saveVisit(Object.assign({ patient_id: pid, visit_date: date, paid: proc.cost - debt, appointment }, proc, opts));
+    const vid = S.saveVisit(Object.assign({ patient_id: pid, visit_date: date, appointment }, proc, opts));
     addImages(vid, (opts.imgs || proc.imgs).map((l, i) => [`${l}-${date}-${i + 1}.jpg`, l]));
     return vid;
   };
 
   // Curated patients (easy to find in the demo)
-  const an = addPatient({ full_name: 'Nguyễn Văn An', dob: '1985-03-12', gender: 'Nam', phone: '0903123456', address: '12 Lê Lợi, P. Bến Thành, TP.HCM',
+  const an = addPatient({ full_name: 'Nguyễn Văn An', dob: '1985-03-12', gender: 'Nam', national_id: '079085001234', phone: '0903123456, 0283 822 1234', photo: true, address: '12 Lê Lợi, P. Bến Thành, TP.HCM',
     allergies: 'Penicillin', systemic_diseases: 'Cao huyết áp', current_meds: 'Amlodipine 5mg' }, thisYear - 1);
   addVisit(an, day(-300), PROCS[0](0));
   addVisit(an, day(-40), { reason: 'Đau răng hàm dưới phải', diagnosis: 'Viêm tuỷ không hồi phục R46', teeth: '46', treatment: 'Lấy tuỷ, trám tạm',
-    plan: 'Chữa tuỷ lần 2, làm sứ', prescription: 'Clindamycin 300mg x 15v (dị ứng Penicillin)', cost: 1200000, imgs: ['xquang', 'truoc'] }, { paid: 1200000 });
+    plan: 'Chữa tuỷ lần 2, làm sứ', prescription: 'Clindamycin 300mg x 15v (dị ứng Penicillin)', imgs: ['xquang', 'truoc'] });
   addVisit(an, day(-7), { reason: 'Chữa tuỷ lần 2', diagnosis: 'R46 sau lấy tuỷ', teeth: '46', treatment: 'Trám bít ống tuỷ', plan: 'Lắp mão sứ',
-    cost: 3500000, imgs: ['xquang', 'sau', 'khac'] }, { paid: 2000000, next_appointment: day(2), next_time: '09:00', next_dur: 60 });
+    cost: 3500000, imgs: ['xquang', 'sau', 'khac'] }, { next_appointment: day(2), next_time: '09:00', next_dur: 60 });
 
-  const binh = addPatient({ full_name: 'Trần Thị Bình', birth_year: 1990, gender: 'Nữ', phone: '0938123456', address: 'Q. Phú Nhuận, TP.HCM' }, thisYear - 2);
+  const binh = addPatient({ full_name: 'Trần Thị Bình', birth_year: 1990, gender: 'Nữ', national_id: '079190004567', phone: '0938123456', address: 'Q. Phú Nhuận, TP.HCM' }, thisYear - 2);
   for (let k = 0; k < 6; k++) addVisit(binh, day(-28 * (6 - k) - 1), PROCS[6](0), k === 5 ? { next_appointment: day(5) } : {});
 
   const minh = addPatient({ full_name: 'Lê Hoàng Minh', dob: `${thisYear - 9}-09-01`, gender: 'Nam', phone: '0909555777', notes: 'Bé sợ khoan, cần trấn an. Liên hệ mẹ: chị Thảo' }, thisYear);
-  addVisit(minh, day(0), KID_PROC(), { paid: 300000 });
+  addVisit(minh, day(0), KID_PROC());
 
-  addPatient({ full_name: 'Phạm Thu Hà', birth_year: 1968, gender: 'Nữ', phone: '0918222333', systemic_diseases: 'Tiểu đường type 2', current_meds: 'Metformin 850mg' }, thisYear);
+  addPatient({ full_name: 'Phạm Thu Hà', birth_year: 1968, gender: 'Nữ', national_id: '079168007890', phone: '0918222333, 0977111222', created_at: S.now_(), systemic_diseases: 'Tiểu đường type 2', current_meds: 'Metformin 850mg' }, thisYear);
 
   // Random patients
   const SUR = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Phan', 'Vũ', 'Võ', 'Đặng', 'Bùi', 'Đỗ', 'Hồ', 'Ngô', 'Dương', 'Lý'];
@@ -121,7 +140,8 @@
     const pid = addPatient({
       full_name: name, gender: male ? 'Nam' : 'Nữ',
       dob: chance(0.6) ? `${by}-${pad(1 + Math.floor(rnd() * 12))}-${pad(1 + Math.floor(rnd() * 28))}` : '', birth_year: by,
-      phone: '09' + String(10000000 + Math.floor(rnd() * 89999999)),
+      phone: ['09' + String(10000000 + Math.floor(rnd() * 89999999))].concat(chance(0.25) ? ['08' + String(10000000 + Math.floor(rnd() * 89999999))] : []).join(', '),
+      national_id: kid ? '' : cccd(by, !male),
       address: chance(0.8) ? `${1 + Math.floor(rnd() * 300)} ${pick(STREETS)}, ${pick(AREAS)}, TP.HCM` : '',
       allergies: chance(0.18) ? pick(ALG) : '', systemic_diseases: kid ? '' : sys[0], current_meds: kid ? '' : sys[1],
     }, first.getFullYear());

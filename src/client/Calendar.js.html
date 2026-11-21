@@ -161,10 +161,10 @@ function apptSheet(a) {
   const st = APPT_STATUS[a.status] || APPT_STATUS.scheduled;
   const wrap = h('div', { class: 'sheet-wrap', onclick: e => { if (e.target === wrap) close(); } },
     h('div', { class: 'sheet' },
-      h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, a.full_name), h('button', { onclick: close }, '✕')),
+      h('div', { class: 'visit-head' }, h('div', { class: 'row-av' }, avatar(a, 48), h('h3', { style: 'margin:0' }, a.full_name)), h('button', { onclick: close }, '✕')),
       a.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + a.allergies) : null,
       kv([['Ngày', fmtDayLong(a.appt_date)], ['Giờ', apptTimeText(a)], ['Nội dung', a.title], ['Ghi chú', a.notes],
-        ['SĐT', a.phone], ['Trạng thái', st.icon + ' ' + st.label]]),
+        ['SĐT', phonesOf(a).join('\n')], ['Trạng thái', st.icon + ' ' + st.label]]),
       h('div', { class: 'row-actions' },
         a.status !== 'arrived' ? h('button', { class: 'primary', onclick: () => setStatus('arrived') }, '✓ Đã đến') : null,
         a.status !== 'no_show' ? h('button', { onclick: () => setStatus('no_show') }, '✗ Không đến') : null,
@@ -189,19 +189,20 @@ function durationPicker(value, onChange) {
 function patientPicker(initial, onPick) {
   const box = h('div');
   const showSelected = p => box.replaceChildren(h('div', { class: 'picked' },
-    h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id), p.phone ? h('div', { class: 'muted' }, p.phone) : null),
+    h('div', { class: 'row-av' }, avatar(p, 44), h('div', { class: 'row-main' }, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
+      phonesOf(p).length ? h('div', { class: 'muted' }, phonesOf(p).join(' · ')) : null)),
     h('button', { type: 'button', onclick: () => { onPick(null); showSearch(); } }, 'Đổi')),
     ...(p.allergies ? [h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies)] : []));
   const showSearch = () => {
-    const q = h('input', { type: 'search', placeholder: 'Gõ tên, mã hoặc SĐT bệnh nhân…', autocomplete: 'off' });
+    const q = h('input', { type: 'search', placeholder: 'Gõ tên, mã, SĐT hoặc CCCD…', autocomplete: 'off' });
     const res = h('div', { class: 'list' });
     let t;
     q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => {
       if (!q.value.trim()) return res.replaceChildren();
       try {
         const list = await api('searchPatients', q.value);
-        res.replaceChildren(...(list.length ? list.slice(0, 8).map(p => h('a', { href: '#', class: 'item', onclick: e => { e.preventDefault(); onPick(p); showSelected(p); } },
-          h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id), h('div', { class: 'muted' }, p.phone || ''))) : [h('div', { class: 'muted' }, 'Không tìm thấy — tạo bệnh nhân mới trước')]));
+        res.replaceChildren(...(list.length ? list.slice(0, 8).map(p => avRow(p, () => { onPick(p); showSelected(p); },
+          h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)), h('div', { class: 'muted' }, [phonesOf(p)[0], p.national_id ? 'CCCD ' + p.national_id : ''].filter(Boolean).join(' · ')))) : [h('div', { class: 'muted' }, 'Không tìm thấy — tạo bệnh nhân mới trước')]));
       } catch (e) { res.replaceChildren(errBox(e)); }
     }, 250); });
     box.replaceChildren(q, res);

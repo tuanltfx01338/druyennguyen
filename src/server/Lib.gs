@@ -3,11 +3,11 @@
  */
 
 var TABLES = {
-  Patients: ['patient_id', 'full_name', 'name_search', 'dob', 'birth_year', 'gender', 'phone', 'address',
-    'allergies', 'systemic_diseases', 'current_meds', 'notes', 'folder_id', 'import_stt', 'import_folder_name',
+  Patients: ['patient_id', 'full_name', 'name_search', 'national_id', 'dob', 'birth_year', 'gender', 'phone', 'address',
+    'allergies', 'systemic_diseases', 'current_meds', 'notes', 'avatar_id', 'folder_id', 'import_stt', 'import_folder_name',
     'created_at', 'updated_at', 'deleted'],
   Visits: ['visit_id', 'patient_id', 'visit_date', 'reason', 'diagnosis', 'teeth', 'treatment', 'plan',
-    'prescription', 'cost', 'paid', 'notes', 'folder_id', 'source',
+    'prescription', 'notes', 'folder_id', 'source',
     'created_at', 'updated_at', 'deleted'],
   Appointments: ['appt_id', 'patient_id', 'appt_date', 'start_time', 'duration_min', 'title', 'notes', 'status', 'visit_id',
     'created_at', 'updated_at', 'deleted'],
@@ -17,7 +17,7 @@ var TABLES = {
 };
 var DATE_COLS = { Patients: ['dob'], Visits: ['visit_date'], Appointments: ['appt_date'] };
 var NUMBER_COLS = {
-  Patients: ['birth_year', 'import_stt'], Visits: ['cost', 'paid'], Images: ['size_bytes'], Appointments: ['duration_min'],
+  Patients: ['birth_year', 'import_stt'], Images: ['size_bytes'], Appointments: ['duration_min'],
   Counters: ['year', 'last_seq'], ImportLog: ['row']
 };
 var IMAGE_LABELS = ['truoc', 'sau', 'xquang', 'khac'];
@@ -84,18 +84,20 @@ function normalizePhone(v) {
   return s;
 }
 
-/** '' → '', valid → number, invalid → null. Accepts "800.000", "800,000đ". */
-function parseMoney(v) {
+/** Several numbers allowed ("0903…, 0912…"); each normalized, duplicates dropped. */
+function normalizePhones(v) {
   if (v == null || v === '') return '';
-  if (typeof v === 'number') return v >= 0 ? v : null;
-  var s = String(v).replace(/[.,\s]|đ|vnd/gi, '');
-  if (s === '') return '';
-  if (!/^\d+$/.test(s)) return null;
-  return Number(s);
+  var parts = typeof v === 'number' ? [v] : String(v).split(/[,;\/\n]+/);
+  var out = [];
+  parts.map(normalizePhone).filter(Boolean).forEach(function (p) { if (out.indexOf(p) < 0) out.push(p); });
+  return out.join(', ');
 }
 
-function debtOf(cost, paid) {
-  return (Number(cost) || 0) - (Number(paid) || 0);
+/** Căn cước công dân: 12 chữ số, duy nhất mỗi công dân. '' → '', invalid → null. */
+function normalizeNationalId(v) {
+  if (v == null || v === '') return '';
+  var s = typeof v === 'number' ? String(Math.round(v)).padStart(12, '0') : String(v).replace(/[\s.-]/g, '');
+  return /^\d{12}$/.test(s) ? s : null;
 }
 
 function yearOf(dateStr) {
@@ -121,7 +123,7 @@ function validatePatient(d, currentYear) {
   var v = {
     full_name: text_(d, 'full_name', e, 'Họ tên'),
     gender: text_(d, 'gender', e, 'Giới tính'),
-    phone: normalizePhone(d.phone),
+    phone: normalizePhones(d.phone),
     address: text_(d, 'address', e, 'Địa chỉ'),
     allergies: text_(d, 'allergies', e, 'Dị ứng'),
     systemic_diseases: text_(d, 'systemic_diseases', e, 'Bệnh toàn thân'),
@@ -129,6 +131,8 @@ function validatePatient(d, currentYear) {
     notes: text_(d, 'notes', e, 'Ghi chú')
   };
   if (!v.full_name) e.push('Thiếu họ tên');
+  v.national_id = normalizeNationalId(d.national_id);
+  if (v.national_id === null) e.push('Số CCCD phải gồm đúng 12 chữ số');
   if (v.gender && GENDERS.indexOf(v.gender) < 0) e.push('Giới tính phải là Nam hoặc Nữ');
   v.dob = parseDateLoose(d.dob);
   if (v.dob === null) e.push('Ngày sinh không hợp lệ');
@@ -153,43 +157,46 @@ function validateVisit(d) {
   if (!v.visit_date) e.push('Ngày khám thiếu hoặc không hợp lệ');
   v.next_appointment = parseDateLoose(d.next_appointment);
   if (v.next_appointment === null) e.push('Ngày hẹn tái khám không hợp lệ');
-  v.cost = parseMoney(d.cost);
-  if (v.cost === null) e.push('Chi phí không hợp lệ');
-  v.paid = parseMoney(d.paid);
-  if (v.paid === null) e.push('Đã thu không hợp lệ');
   return { errors: e, value: v };
 }
 
 /**
  * Parses the 2 sheets of Mau_nhap_benh_nhan_cu.xlsx (rows from row 3, values already
  * normalized by the caller: Date → 'yyyy-mm-dd').
- * BenhNhan cols: A STT, B MaBN(ignored), C HoTen, D NgaySinh, E NamSinh, F GioiTinh, G SDT, H DiaChi,
- *   I DiUng, J BenhToanThan, K Thuoc, L ThuMucAnh, M GhiChu
+ * BenhNhan cols: A STT, B MaBN(ignored), C HoTen, D NgaySinh, E NamSinh, F GioiTinh, G CCCD, H SDT, I DiaChi,
+ *   J DiUng, K BenhToanThan, L Thuoc, M ThuMucAnh, N GhiChu
  * LanKham cols: A STT BN, B(auto), C NgayKham, D LyDo, E ChanDoan, F Rang, G DieuTri, H KeHoach,
- *   I DonThuoc, J ChiPhi, K DaThu, L(auto), M HenTaiKham, N GhiChu
+ *   I DonThuoc, J HenTaiKham, K GhiChu
  */
 function parseImport(bnRows, lkRows, opts) {
   var errors = [], warnings = [], patients = [], byStt = {}, skippedExisting = 0;
-  var existing = {};
+  var existing = {}, idOwner = {}; // idOwner: CCCD → "hồ sơ NK…" / "dòng n"
   (opts.existingStts || []).forEach(function (s) { existing[Number(s)] = true; });
+  (opts.existingNationalIds || []).forEach(function (x) { idOwner[x.national_id] = { stt: x.import_stt, label: 'hồ sơ ' + x.patient_id }; });
   var isBlank = function (r) { return r.every(function (c) { return c === '' || c == null; }); };
   var isExample = function (r, col) { return /VÍ DỤ/i.test(String(r[col] || '')); };
 
   bnRows.forEach(function (r, i) {
     var row = i + 3;
-    if (isBlank(r.slice(0, 13))) return;
-    if (isExample(r, 12)) { warnings.push({ sheet: 'BenhNhan', row: row, message: 'Bỏ qua dòng VÍ DỤ' }); return; }
+    if (isBlank(r.slice(0, 14))) return;
+    if (isExample(r, 13)) { warnings.push({ sheet: 'BenhNhan', row: row, message: 'Bỏ qua dòng VÍ DỤ' }); return; }
     var stt = Number(r[0]);
     if (!(Number.isInteger(stt) && stt >= 1)) { errors.push({ sheet: 'BenhNhan', row: row, message: 'STT phải là số nguyên ≥ 1' }); return; }
     if (byStt[stt]) { errors.push({ sheet: 'BenhNhan', row: row, message: 'STT ' + stt + ' bị trùng' }); return; }
     var res = validatePatient({
-      full_name: r[2], dob: r[3], birth_year: r[4], gender: r[5], phone: r[6], address: r[7],
-      allergies: r[8], systemic_diseases: r[9], current_meds: r[10], notes: r[12]
+      full_name: r[2], dob: r[3], birth_year: r[4], gender: r[5], national_id: r[6], phone: r[7], address: r[8],
+      allergies: r[9], systemic_diseases: r[10], current_meds: r[11], notes: r[13]
     }, opts.currentYear);
     res.errors.forEach(function (m) { errors.push({ sheet: 'BenhNhan', row: row, message: m }); });
     var p = res.value;
+    if (p.national_id) {
+      var owner = idOwner[p.national_id];
+      // Same CCCD on a re-run of the same file (same STT) is fine; anything else is a duplicate person.
+      if (owner && owner.stt !== stt) errors.push({ sheet: 'BenhNhan', row: row, message: 'CCCD ' + p.national_id + ' trùng với ' + owner.label });
+      else if (!owner) idOwner[p.national_id] = { stt: stt, label: 'dòng ' + row };
+    }
     p.import_stt = stt;
-    p.import_folder_name = String(r[11] == null ? '' : r[11]).trim();
+    p.import_folder_name = String(r[12] == null ? '' : r[12]).trim();
     p.visits = [];
     byStt[stt] = p;
     if (existing[stt]) { skippedExisting++; p.skip = true; }
@@ -198,13 +205,13 @@ function parseImport(bnRows, lkRows, opts) {
 
   lkRows.forEach(function (r, i) {
     var row = i + 3;
-    if (isBlank([r[0]].concat(r.slice(2, 11), r.slice(12, 14)))) return;
-    if (isExample(r, 13)) { warnings.push({ sheet: 'LanKham', row: row, message: 'Bỏ qua dòng VÍ DỤ' }); return; }
+    if (isBlank([r[0]].concat(r.slice(2, 11)))) return;
+    if (isExample(r, 10)) { warnings.push({ sheet: 'LanKham', row: row, message: 'Bỏ qua dòng VÍ DỤ' }); return; }
     var p = byStt[Number(r[0])];
     if (!p) { errors.push({ sheet: 'LanKham', row: row, message: 'STT BN "' + r[0] + '" không có trong sheet BenhNhan' }); return; }
     var res = validateVisit({
       visit_date: r[2], reason: r[3], diagnosis: r[4], teeth: r[5], treatment: r[6], plan: r[7],
-      prescription: r[8], cost: r[9], paid: r[10], next_appointment: r[12], notes: r[13]
+      prescription: r[8], next_appointment: r[9], notes: r[10]
     });
     res.errors.forEach(function (m) { errors.push({ sheet: 'LanKham', row: row, message: m }); });
     p.visits.push(res.value);
@@ -296,44 +303,47 @@ function sortAppointments(list) {
 }
 
 /**
- * Dashboard numbers from active patients/visits/appointments. "import-images" visits are containers
- * for old photos, not real consultations → excluded from visit counts.
+ * Dashboard numbers (clinical only — no money). "import-images" visits are containers for old photos,
+ * not real consultations → excluded from visit counts.
  */
 function buildDashboard(patients, visits, today, appointments) {
   var byId = {};
   patients.forEach(function (p) { byId[p.patient_id] = p; });
-  visits = visits.filter(function (v) { return byId[v.patient_id]; });
-  var real = visits.filter(function (v) { return v.source !== 'import-images'; });
+  var real = visits.filter(function (v) { return byId[v.patient_id] && v.source !== 'import-images'; });
   var months = lastMonths(today, 6);
-  var monthly = months.map(function (m) { return { month: m, visits: 0, paid: 0 }; });
-  var debtBy = {}, todayVisits = [];
+  var monthly = months.map(function (m) { return { month: m, visits: 0 }; });
+  var todayVisits = [];
   real.forEach(function (v) {
     var i = months.indexOf(String(v.visit_date).slice(0, 7));
-    if (i >= 0) { monthly[i].visits++; monthly[i].paid += Number(v.paid) || 0; }
-    var d = debtOf(v.cost, v.paid);
-    if (d) debtBy[v.patient_id] = (debtBy[v.patient_id] || 0) + d;
+    if (i >= 0) monthly[i].visits++;
     if (v.visit_date === today) todayVisits.push({ patient_id: v.patient_id, full_name: byId[v.patient_id].full_name,
-      visit_id: v.visit_id, reason: v.reason, diagnosis: v.diagnosis });
+      avatar_id: byId[v.patient_id].avatar_id, visit_id: v.visit_id, reason: v.reason, diagnosis: v.diagnosis });
   });
-  var debtors = Object.keys(debtBy).filter(function (k) { return debtBy[k] > 0; }).map(function (k) {
-    return { patient_id: k, full_name: byId[k].full_name, phone: byId[k].phone, debt: debtBy[k] };
-  }).sort(function (a, b) { return b.debt - a.debt; });
-  var to = addDays(today, 7);
-  var upcoming = sortAppointments((appointments || []).filter(function (a) {
-    return byId[a.patient_id] && a.status !== 'cancelled' && a.appt_date >= today && a.appt_date <= to;
-  })).map(function (a) {
-    return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: byId[a.patient_id].full_name, phone: byId[a.patient_id].phone,
+  var pub = function (a) {
+    var p = byId[a.patient_id];
+    return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: p.full_name, phone: p.phone, avatar_id: p.avatar_id,
       appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title, status: a.status };
-  });
-  var cur = monthly[monthly.length - 1];
+  };
+  var mine = (appointments || []).filter(function (a) { return byId[a.patient_id]; });
+  var to = addDays(today, 7), since = addDays(today, -30);
+  var upcoming = sortAppointments(mine.filter(function (a) {
+    return a.status !== 'cancelled' && a.appt_date >= today && a.appt_date <= to;
+  })).map(pub);
+  // Missed appointments (last 30 days) — patients to call back.
+  var missed = sortAppointments(mine.filter(function (a) {
+    return a.status === 'no_show' && a.appt_date >= since && a.appt_date <= today;
+  })).reverse().map(pub);
+  var month = today.slice(0, 7);
   return {
     today: today,
     stats: {
-      patients: patients.length, visitsToday: todayVisits.length, visitsMonth: cur.visits, paidMonth: cur.paid,
+      patients: patients.length,
+      newPatientsMonth: patients.filter(function (p) { return String(p.created_at).slice(0, 7) === month; }).length,
+      visitsToday: todayVisits.length, visitsMonth: monthly[monthly.length - 1].visits,
       apptToday: upcoming.filter(function (a) { return a.appt_date === today; }).length, appt7: upcoming.length,
-      totalDebt: debtors.reduce(function (s, d) { return s + d.debt; }, 0), debtorCount: debtors.length
+      missed30: missed.length
     },
-    monthly: monthly, todayVisits: todayVisits, upcoming: upcoming, debtors: debtors.slice(0, 10)
+    monthly: monthly, todayVisits: todayVisits, upcoming: upcoming, missed: missed.slice(0, 10)
   };
 }
 
