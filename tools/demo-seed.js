@@ -16,44 +16,126 @@
   const S = window.__SERVER(gas);
   S.setup();
 
+  // ---------- fictional dataset (deterministic) ----------
+  let seed = 20261121;
+  const rnd = () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const chance = p => rnd() < p;
+  const thisYear = new Date().getFullYear();
+  const dateOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
   const colors = ['#e3f2f1', '#fdecea', '#e8eaf6', '#fff8e1', '#e8f5e9'];
-  const svg = (title, i) => new TextEncoder().encode(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">` +
-    `<rect width="800" height="600" fill="${colors[i % colors.length]}"/>` +
-    `<path d="M330 170c-60 0-90 50-80 120 8 55 30 90 40 160 6 40 40 45 50 5 10-40 15-80 60-80s50 40 60 80c10 40 44 35 50-5 10-70 32-105 40-160 10-70-20-120-80-120-30 0-45 15-70 15s-40-15-70-15z" fill="#fff" stroke="#0b6e6e" stroke-width="8"/>` +
-    `<text x="400" y="560" font-family="Arial" font-size="34" text-anchor="middle" fill="#0b6e6e">${title}</text></svg>`);
-  const addImages = (visitId, names) => {
+  const toothPath = 'M330 170c-60 0-90 50-80 120 8 55 30 90 40 160 6 40 40 45 50 5 10-40 15-80 60-80s50 40 60 80c10 40 44 35 50-5 10-70 32-105 40-160 10-70-20-120-80-120-30 0-45 15-70 15s-40-15-70-15z';
+  const svg = (title, i, label) => new TextEncoder().encode(label === 'xquang'
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="#111"/>` +
+      `<path d="${toothPath}" fill="#cfd8dc" opacity=".85" transform="translate(${(i % 3) * 30 - 30} 0)"/><path d="M380 260v190M420 260v190" stroke="#fff" stroke-width="6" opacity=".6"/>` +
+      `<text x="400" y="560" font-family="Arial" font-size="30" text-anchor="middle" fill="#90a4ae">X-QUANG · ${title}</text></svg>`
+    : `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="${colors[i % colors.length]}"/>` +
+      `<path d="${toothPath}" fill="${label === 'truoc' ? '#f3e5ab' : '#fff'}" stroke="#0b6e6e" stroke-width="8"/>` +
+      `<text x="400" y="560" font-family="Arial" font-size="30" text-anchor="middle" fill="#0b6e6e">${title}</text></svg>`);
+  let imgNo = 0;
+  const addImages = (visitId, specs) => {
+    if (!specs.length) return;
     const ctx = S.getUploadContext(visitId);
     const folder = gas.DriveApp.getFolderById(ctx.folderId);
-    const files = names.map(([n, label], i) => ({ id: new gas.__File(n, folder, 'image/svg+xml', '', undefined, svg(n, i)).id, label }));
+    const files = specs.map(([n, label]) => {
+      const bytes = svg(n, imgNo++, label);
+      const f = new gas.__File(n, folder, 'image/svg+xml', '', 2_000_000 + Math.floor(rnd() * 3_000_000), bytes);
+      f.bytes = bytes;
+      return { id: f.id, label };
+    });
     S.registerImages(visitId, files);
   };
+  // Patient created "in" a given year → code NKyy-nnnn of that year (as the real app would have produced then).
+  const addPatient = (d, year) => {
+    const id = S.reserveIds_(year, 1)[0];
+    S.appendRows_('Patients', [Object.assign({ gender: '', phone: '', address: '', allergies: '', systemic_diseases: '', current_meds: '', notes: '', dob: '' }, d, {
+      patient_id: id, name_search: S.normalizeText(d.full_name), birth_year: d.dob ? Number(d.dob.slice(0, 4)) : (d.birth_year || ''),
+      folder_id: S.createPatientFolder_(id, d.full_name).getId(), created_at: S.now_(), updated_at: S.now_(), deleted: false })]);
+    return id;
+  };
 
-  const an = S.savePatient({ full_name: 'Nguyễn Văn An', dob: '1985-03-12', gender: 'Nam', phone: '0903123456', address: '12 Lê Lợi, P. Bến Thành, TP.HCM',
-    allergies: 'Penicillin', systemic_diseases: 'Cao huyết áp', current_meds: 'Amlodipine 5mg' });
-  let v = S.saveVisit({ patient_id: an, visit_date: day(-40), reason: 'Đau răng hàm dưới phải', diagnosis: 'Viêm tuỷ không hồi phục R46', teeth: '46',
-    treatment: 'Lấy tuỷ, trám tạm', plan: 'Chữa tuỷ lần 2, làm sứ', prescription: 'Clindamycin 300mg x 15v (dị ứng Penicillin)', cost: 1200000, paid: 1200000 });
-  addImages(v, [['xquang-R46-truoc.jpg', 'xquang'], ['R46-truoc.jpg', 'truoc']]);
-  v = S.saveVisit({ patient_id: an, visit_date: day(-7), reason: 'Chữa tuỷ lần 2', diagnosis: 'R46 sau lấy tuỷ', teeth: '46',
-    treatment: 'Trám bít ống tuỷ', plan: 'Lắp mão sứ', cost: 3500000, paid: 2000000, next_appointment: day(2) });
-  addImages(v, [['xquang-R46-sau.jpg', 'xquang'], ['R46-sau.jpg', 'sau'], ['mau-su.jpg', 'khac']]);
+  const FDI = [11, 12, 13, 14, 15, 16, 17, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 41, 42, 43, 44, 45, 46, 47];
+  const PROCS = [
+    t => ({ reason: 'Cạo vôi định kỳ', diagnosis: 'Viêm nướu nhẹ, vôi răng độ 2', treatment: 'Cạo vôi, đánh bóng', plan: 'Tái khám 6 tháng', cost: 300000, imgs: [] }),
+    t => ({ reason: 'Ê buốt khi ăn ngọt', diagnosis: `Sâu ngà R${t}`, teeth: String(t), treatment: `Trám composite R${t}`, cost: 400000, imgs: ['truoc', 'sau'] }),
+    t => ({ reason: 'Đau nhức về đêm', diagnosis: `Viêm tuỷ không hồi phục R${t}`, teeth: String(t), treatment: `Lấy tuỷ R${t}, trám tạm`, plan: 'Chữa tuỷ lần 2', prescription: 'Paracetamol 500mg x 10v', cost: 1500000, imgs: ['xquang'] }),
+    t => { const k = pick([38, 48]); return { reason: 'Răng khôn mọc lệch', diagnosis: `R${k} mọc lệch gần, viêm lợi trùm`, teeth: String(k), treatment: `Tiểu phẫu nhổ R${k}`, plan: 'Cắt chỉ sau 7 ngày', prescription: 'Amoxicillin 500mg x 15v; Paracetamol 500mg x 10v', cost: 2000000, imgs: ['xquang', 'khac'] }; },
+    t => ({ reason: 'Mất răng, muốn trồng lại', diagnosis: `Mất R${t}`, teeth: String(t), treatment: `Cấy implant R${t} giai đoạn 1`, plan: 'Gắn mão sau 3 tháng', prescription: 'Amoxicillin 500mg x 15v', cost: 15000000, imgs: ['xquang', 'truoc'] }),
+    t => ({ reason: 'Răng ố vàng', diagnosis: 'Nhiễm màu ngoại sinh', treatment: 'Tẩy trắng tại phòng khám', cost: 2500000, imgs: ['truoc', 'sau'] }),
+    t => ({ reason: 'Niềng răng — tái khám', diagnosis: 'Sai khớp cắn loại II', treatment: 'Thay dây cung, chỉnh thun', plan: 'Tái khám 4 tuần', cost: 500000, imgs: ['khac', 'khac'] }),
+    t => ({ reason: 'Bọc răng sứ', diagnosis: `R${t} vỡ lớn sau chữa tuỷ`, teeth: String(t), treatment: 'Mài cùi, lấy dấu, gắn sứ tạm', plan: 'Gắn sứ chính thức sau 5 ngày', cost: 4000000, imgs: ['truoc', 'sau', 'xquang'] }),
+  ];
+  const KID_PROC = () => { const t = pick([54, 55, 64, 65, 74, 75, 84, 85]); return { reason: 'Sâu răng sữa', diagnosis: `Sâu R${t}`, teeth: String(t), treatment: 'Trám GIC', cost: 300000, imgs: ['truoc'] }; };
 
-  const binh = S.savePatient({ full_name: 'Trần Thị Bình', birth_year: 1990, gender: 'Nữ', phone: '0938123456' });
-  v = S.saveVisit({ patient_id: binh, visit_date: day(-1), reason: 'Niềng răng — kiểm tra định kỳ', diagnosis: 'Sai khớp cắn loại II',
-    treatment: 'Thay dây cung', plan: 'Tái khám 4 tuần', cost: 500000, paid: 500000, next_appointment: day(5) });
-  addImages(v, [['mat-nhai-tren.jpg', 'khac'], ['mat-nhai-duoi.jpg', 'khac']]);
+  const addVisit = (pid, date, proc, opts = {}) => {
+    const debt = chance(0.2) ? Math.round(proc.cost * pick([0.3, 0.5]) / 1000) * 1000 : 0;
+    const vid = S.saveVisit(Object.assign({ patient_id: pid, visit_date: date, paid: proc.cost - debt }, proc, opts));
+    addImages(vid, (opts.imgs || proc.imgs).map((l, i) => [`${l}-${date}-${i + 1}.jpg`, l]));
+    return vid;
+  };
 
-  const minh = S.savePatient({ full_name: 'Lê Hoàng Minh', dob: '2015-09-01', gender: 'Nam', phone: '0909555777', notes: 'Bé sợ khoan, cần trấn an' });
-  S.saveVisit({ patient_id: minh, visit_date: day(0), reason: 'Sâu răng sữa', diagnosis: 'Sâu R75', teeth: '75', treatment: 'Trám GIC', cost: 300000, paid: 300000 });
+  // Curated patients (easy to find in the demo)
+  const an = addPatient({ full_name: 'Nguyễn Văn An', dob: '1985-03-12', gender: 'Nam', phone: '0903123456', address: '12 Lê Lợi, P. Bến Thành, TP.HCM',
+    allergies: 'Penicillin', systemic_diseases: 'Cao huyết áp', current_meds: 'Amlodipine 5mg' }, thisYear - 1);
+  addVisit(an, day(-300), PROCS[0](0));
+  addVisit(an, day(-40), { reason: 'Đau răng hàm dưới phải', diagnosis: 'Viêm tuỷ không hồi phục R46', teeth: '46', treatment: 'Lấy tuỷ, trám tạm',
+    plan: 'Chữa tuỷ lần 2, làm sứ', prescription: 'Clindamycin 300mg x 15v (dị ứng Penicillin)', cost: 1200000, imgs: ['xquang', 'truoc'] }, { paid: 1200000 });
+  addVisit(an, day(-7), { reason: 'Chữa tuỷ lần 2', diagnosis: 'R46 sau lấy tuỷ', teeth: '46', treatment: 'Trám bít ống tuỷ', plan: 'Lắp mão sứ',
+    cost: 3500000, imgs: ['xquang', 'sau', 'khac'] }, { paid: 2000000, next_appointment: day(2) });
 
-  S.savePatient({ full_name: 'Phạm Thu Hà', birth_year: 1968, gender: 'Nữ', phone: '0918222333', systemic_diseases: 'Tiểu đường type 2' });
+  const binh = addPatient({ full_name: 'Trần Thị Bình', birth_year: 1990, gender: 'Nữ', phone: '0938123456', address: 'Q. Phú Nhuận, TP.HCM' }, thisYear - 2);
+  for (let k = 0; k < 6; k++) addVisit(binh, day(-28 * (6 - k) - 1), PROCS[6](0), k === 5 ? { next_appointment: day(5) } : {});
+
+  const minh = addPatient({ full_name: 'Lê Hoàng Minh', dob: `${thisYear - 9}-09-01`, gender: 'Nam', phone: '0909555777', notes: 'Bé sợ khoan, cần trấn an. Liên hệ mẹ: chị Thảo' }, thisYear);
+  addVisit(minh, day(0), KID_PROC(), { paid: 300000 });
+
+  addPatient({ full_name: 'Phạm Thu Hà', birth_year: 1968, gender: 'Nữ', phone: '0918222333', systemic_diseases: 'Tiểu đường type 2', current_meds: 'Metformin 850mg' }, thisYear);
+
+  // Random patients
+  const SUR = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Phan', 'Vũ', 'Võ', 'Đặng', 'Bùi', 'Đỗ', 'Hồ', 'Ngô', 'Dương', 'Lý'];
+  const MID_M = ['Văn', 'Hữu', 'Minh', 'Quốc', 'Đức', 'Hoàng', 'Thanh', 'Gia'];
+  const MID_F = ['Thị', 'Ngọc', 'Thu', 'Thanh', 'Mỹ', 'Bảo', 'Kim', 'Phương'];
+  const GIV_M = ['Bình', 'Cường', 'Dũng', 'Hải', 'Khang', 'Long', 'Nam', 'Phúc', 'Quân', 'Sơn', 'Tài', 'Thắng', 'Tuấn', 'Vinh', 'Khoa', 'Huy'];
+  const GIV_F = ['Anh', 'Châu', 'Diệp', 'Giang', 'Hạnh', 'Lan', 'Linh', 'Mai', 'Ngân', 'Oanh', 'Phương', 'Trang', 'Uyên', 'Vy', 'Thảo', 'Yến'];
+  const AREAS = ['Q.1', 'Q.3', 'Q.10', 'Q. Bình Thạnh', 'Q. Phú Nhuận', 'Q. Gò Vấp', 'Q.7', 'TP. Thủ Đức', 'Q. Tân Bình'];
+  const STREETS = ['Nguyễn Trãi', 'Lê Văn Sỹ', 'Cách Mạng Tháng 8', 'Phan Xích Long', 'Nguyễn Đình Chiểu', 'Võ Văn Tần', 'Điện Biên Phủ', 'Hai Bà Trưng'];
+  const SYS = [['Cao huyết áp', 'Amlodipine 5mg'], ['Tiểu đường type 2', 'Metformin 500mg'], ['Hen suyễn', 'Ventolin xịt khi cần'], ['Đang mang thai 5 tháng', '']];
+  const ALG = ['Penicillin', 'Lidocaine', 'Aspirin', 'Ibuprofen'];
+  const used = new Set();
+  for (let n = 0; n < 40; n++) {
+    const male = chance(0.5);
+    let name;
+    do { name = `${pick(SUR)} ${pick(male ? MID_M : MID_F)} ${pick(male ? GIV_M : GIV_F)}`; } while (used.has(name));
+    used.add(name);
+    const kid = chance(0.12);
+    const by = kid ? thisYear - 6 - Math.floor(rnd() * 8) : 1950 + Math.floor(rnd() * 55);
+    const sys = chance(0.25) ? pick(SYS) : ['', ''];
+    const first = new Date(Date.now() - Math.floor(rnd() * 900) * 864e5); // first visit within ~2.5 years
+    const pid = addPatient({
+      full_name: name, gender: male ? 'Nam' : 'Nữ',
+      dob: chance(0.6) ? `${by}-${pad(1 + Math.floor(rnd() * 12))}-${pad(1 + Math.floor(rnd() * 28))}` : '', birth_year: by,
+      phone: '09' + String(10000000 + Math.floor(rnd() * 89999999)),
+      address: chance(0.8) ? `${1 + Math.floor(rnd() * 300)} ${pick(STREETS)}, ${pick(AREAS)}, TP.HCM` : '',
+      allergies: chance(0.18) ? pick(ALG) : '', systemic_diseases: kid ? '' : sys[0], current_meds: kid ? '' : sys[1],
+    }, first.getFullYear());
+    if (chance(0.08)) continue; // a few patients registered without any visit yet
+    let d = first;
+    const visits = 1 + Math.floor(rnd() * 5);
+    for (let k = 0; k < visits && d <= new Date(); k++) {
+      const isLast = k === visits - 1 || new Date(d.getTime() + 40 * 864e5) > new Date();
+      addVisit(pid, dateOf(d), kid ? KID_PROC() : pick(PROCS)(pick(FDI)),
+        isLast && chance(0.35) ? { next_appointment: day(Math.floor(rnd() * 8)) } : {});
+      d = new Date(d.getTime() + (20 + Math.floor(rnd() * 200)) * 864e5);
+    }
+  }
 
   // Old photo folders waiting in _import (1 matches after importing the sample Excel, 1 does not)
   const imp = gas.DriveApp.getFolderById(gas.PropertiesService.getScriptProperties().getProperty('IMPORT_FOLDER_ID'));
   const fk = imp.createFolder('0006_Dang Van Khoa');
-  ['khoa-2022-1.jpg', 'khoa-2022-2.jpg'].forEach((n, i) => new gas.__File(n, fk, 'image/svg+xml', '', undefined, svg(n, i)));
+  [['khoa-2022-1.jpg', 'xquang'], ['khoa-2022-2.jpg', 'khac']].forEach(([n, l], i) => new gas.__File(n, fk, 'image/svg+xml', '', undefined, svg(n, i, l)));
   const fx = imp.createFolder('anh_chua_ro_ten');
-  new gas.__File('scan-01.jpg', fx, 'image/svg+xml', '', undefined, svg('scan-01.jpg', 3));
+  new gas.__File('scan-01.jpg', fx, 'image/svg+xml', '', undefined, svg('scan-01.jpg', 3, 'khac'));
 
   // ---- google.script.* fakes ----
   const runner = (ok = () => {}, fail = () => {}) => new Proxy({}, {

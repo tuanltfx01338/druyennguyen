@@ -41,7 +41,7 @@ window.__SERVER = function (gas) {
   const { ${GLOBALS.filter(g => g !== 'HtmlService').join(', ')} } = gas;
   const console = gas.console;
 ${noClose(server)}
-  return { ${publicFns.join(', ')}, readActive_ };
+  return { ${publicFns.join(', ')}, readActive_, reserveIds_, appendRows_, createPatientFolder_, now_ };
 };
 </script>
 <script>
