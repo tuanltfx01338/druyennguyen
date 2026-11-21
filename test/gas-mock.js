@@ -1,5 +1,12 @@
 // Minimal in-memory fakes of the Apps Script services used by src/server — enough for integration tests.
-const crypto = require('node:crypto');
+// Runs in Node (tests) and in the browser (tools/build-demo.js) — so no Node-only APIs.
+const b64enc = bytes => {
+  const u = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+  let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const b64dec = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
 
 function iter(arr) { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; }
 const pad = n => String(n).padStart(2, '0');
@@ -23,7 +30,7 @@ function createGas(opts = {}) {
     setTrashed(t) { this.trashed = t; }
   }
   class File {
-    constructor(name, parent, mime, content = '', size) { this.id = newId('fil'); this.name = name; this.parent = parent; this.mime = mime; this.content = content; this.size = size ?? content.length; this.trashed = false; this.created = new Date(Date.now() + idSeq); items.set(this.id, this); }
+    constructor(name, parent, mime, content = '', size, bytes) { this.id = newId('fil'); this.name = name; this.parent = parent; this.mime = mime; this.content = content; this.bytes = bytes || null; this.size = size ?? (bytes ? bytes.length : content.length); this.trashed = false; this.created = new Date(Date.now() + idSeq); items.set(this.id, this); }
     getId() { return this.id; } getName() { return this.name; } getMimeType() { return this.mime; } getSize() { return this.size; }
     getDateCreated() { return this.created; }
     moveTo(f) { this.parent = f; return this; }
@@ -97,7 +104,7 @@ function createGas(opts = {}) {
     },
     Drive: {
       Files: {
-        get: (id, o) => { const f = items.get(id); if (!f) throw new Error('404'); return { id: f.id, name: f.name, mimeType: f.mime, size: String(f.size), parents: [f.parent.id], thumbnailLink: 'https://lh3/x=s220' }; },
+        get: (id, o) => { const f = items.get(id); if (!f) throw new Error('404'); return { id: f.id, name: f.name, mimeType: f.mime, size: String(f.size), parents: [f.parent.id], thumbnailLink: 'https://lh3.googleusercontent.com/d/' + f.id + '=s220' }; },
         create: (res, blob) => {
           const parent = items.get(res.parents[0]);
           if (res.mimeType === 'application/vnd.google-apps.spreadsheet') {
@@ -111,9 +118,9 @@ function createGas(opts = {}) {
     },
     Utilities: {
       formatDate: fmt,
-      getUuid: () => crypto.randomUUID(),
-      base64Decode: s => [...Buffer.from(s, 'base64')],
-      base64Encode: b => Buffer.from(b).toString('base64'),
+      getUuid: () => globalThis.crypto.randomUUID(),
+      base64Decode: s => b64dec(s),
+      base64Encode: b => b64enc(b),
       newBlob: (bytes, mime, name) => ({ bytes, mime, name }),
     },
     MimeType: { MICROSOFT_EXCEL: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', GOOGLE_SHEETS: 'application/vnd.google-apps.spreadsheet', PLAIN_TEXT: 'text/plain' },
@@ -132,21 +139,28 @@ function createGas(opts = {}) {
         if (o.method === 'post') {
           const meta = JSON.parse(o.payload);
           const sid = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=' + (++idSeq);
-          sessions.set(sid, { meta, total: Number(o.headers['X-Upload-Content-Length']), got: 0, mime: o.headers['X-Upload-Content-Type'] });
+          sessions.set(sid, { meta, total: Number(o.headers['X-Upload-Content-Length']), got: 0, mime: o.headers['X-Upload-Content-Type'], parts: [] });
           return resp(200, {}, { Location: sid });
         }
         const ses = sessions.get(url);
         const m = /bytes (\d+)-(\d+)\/(\d+)/.exec(o.headers['Content-Range']);
         if (!ses || Number(m[1]) !== ses.got || o.payload.length !== Number(m[2]) - Number(m[1]) + 1) return resp(400, {});
         ses.got += o.payload.length;
+        ses.parts.push(o.payload);
         if (ses.got < ses.total) return resp(308, {});
-        const f = new File(ses.meta.name, items.get(ses.meta.parents[0]), ses.mime, '', ses.total);
+        const all = new Uint8Array(ses.total); let off = 0;
+        for (const p of ses.parts) { all.set(p, off); off += p.length; }
+        const f = new File(ses.meta.name, items.get(ses.meta.parents[0]), ses.mime, '', ses.total, all);
         return resp(200, { id: f.id, name: f.name, mimeType: f.mime, size: String(f.size) });
       },
-      fetchAll: reqs => reqs.map(() => ({ getResponseCode: () => 200, getHeaders: () => ({ 'Content-Type': 'image/jpeg' }), getContent: () => [1, 2, 3] })),
+      // Thumbnail fetch: return the stored bytes of the file named in the link (or a tiny stub).
+      fetchAll: reqs => reqs.map(r => {
+        const f = items.get((/\/d\/([^=]+)=/.exec(r.url) || [])[1]);
+        return { getResponseCode: () => (f ? 200 : 404), getHeaders: () => ({ 'Content-Type': f ? f.mime : '' }), getContent: () => (f && f.bytes) || [1, 2, 3] };
+      }),
     },
   };
   gas.__items = items; gas.__root = root; gas.__File = File; gas.__spreadsheets = spreadsheets;
   return gas;
 }
-module.exports = { createGas };
+if (typeof module !== 'undefined') module.exports = { createGas };
