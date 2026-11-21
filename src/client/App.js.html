@@ -1,0 +1,397 @@
+<script>
+'use strict';
+/* ---------- core helpers ---------- */
+const api = (fn, ...args) => new Promise((resolve, reject) =>
+  google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args));
+
+/** DOM builder — strings become text nodes (never innerHTML) → no XSS from patient data. */
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'class') el.className = v;
+    else if (k === 'value') el.value = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
+  return el;
+}
+const $app = document.getElementById('app');
+const mount = (...nodes) => $app.replaceChildren(...nodes);
+const loading = () => mount(h('div', { class: 'loading' }, 'Đang tải…'));
+
+const LABELS = { truoc: 'Trước', sau: 'Sau', xquang: 'X-quang', khac: 'Khác' };
+const labelOptions = sel => Object.entries(LABELS).map(([k, v]) => h('option', { value: k, selected: k === sel }, v));
+const pad = n => String(n).padStart(2, '0');
+const todayStr = (offset = 0) => { const d = new Date(Date.now() + offset * 864e5); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const fmtDate = s => s ? String(s).split('-').reverse().join('/') : '';
+const fmtMoney = n => (n === '' || n == null) ? '' : Number(n).toLocaleString('vi-VN') + ' đ';
+const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
+const errMsg = e => (e && e.message) || String(e);
+
+let toastTimer;
+function toast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'show ' + type;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', type === 'error' ? 6000 : 3000);
+}
+function errBox(e, retry) {
+  return h('div', { class: 'err' }, errMsg(e), ' ', retry ? h('button', { onclick: retry }, 'Thử lại') : null);
+}
+function link(path, ...kids) {
+  return h('a', { href: '#', class: 'item', onclick: e => { e.preventDefault(); go(path); } }, ...kids);
+}
+function blobToBase64(blob) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+/* ---------- router (google.script.history keeps browser Back working inside the iframe) ---------- */
+let dirty = false;
+let uploadBusy = false;
+const routes = [
+  [/^$/, () => pageHome()],
+  [/^p\/new$/, () => pagePatientForm()],
+  [/^p\/([^/]+)\/edit$/, m => pagePatientForm(m[1])],
+  [/^p\/([^/]+)\/v\/new$/, m => pageVisitForm({ patientId: m[1] })],
+  [/^p\/([^/]+)$/, m => pagePatient(m[1])],
+  [/^v\/([^/]+)$/, m => pageVisitForm({ visitId: m[1] })],
+  [/^import$/, () => pageImport()],
+];
+function canLeave() {
+  if (uploadBusy) return confirm('Ảnh đang tải lên. Rời trang sẽ dừng tải. Vẫn rời?');
+  if (dirty) return confirm('Có thay đổi chưa lưu. Rời trang?');
+  return true;
+}
+function go(path, push = true) {
+  if (!canLeave()) return;
+  dirty = false; uploadBusy = false;
+  if (push) google.script.history.push({ path }, null, path);
+  render(path);
+}
+function render(path) {
+  window.scrollTo(0, 0);
+  for (const [re, fn] of routes) { const m = path.match(re); if (m) return fn(m); }
+  pageHome();
+}
+function start() {
+  document.getElementById('home-link').addEventListener('click', e => { e.preventDefault(); go(''); });
+  google.script.history.setChangeHandler(e => { dirty = false; uploadBusy = false; render((e.state && e.state.path) || ''); });
+  window.addEventListener('beforeunload', e => { if (dirty || uploadBusy) { e.preventDefault(); e.returnValue = ''; } });
+  google.script.url.getLocation(loc => render(loc.hash || ''));
+}
+
+/* ---------- home ---------- */
+function patientRow(p) {
+  return link('p/' + p.patient_id,
+    h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
+    p.allergies ? h('span', { class: 'badge red' }, 'Dị ứng') : null,
+    h('div', { class: 'muted' }, [p.birth_year ? 'Sinh ' + p.birth_year : '', p.phone].filter(Boolean).join(' · ')));
+}
+
+function pageHome() {
+  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tìm tên (không dấu cũng được), mã BN hoặc SĐT…', autocomplete: 'off' });
+  const results = h('div', { class: 'list' });
+  const from = h('input', { type: 'date', value: todayStr(-30) });
+  const to = h('input', { type: 'date', value: todayStr() });
+  const visitsBox = h('div', { class: 'list' });
+  const upcoming = h('div', { class: 'list' }, h('div', { class: 'muted' }, 'Đang tải…'));
+  const quota = h('div', { class: 'quota' });
+
+  let timer, seq = 0;
+  async function doSearch() {
+    const my = ++seq;
+    results.replaceChildren(h('div', { class: 'muted' }, 'Đang tìm…'));
+    try {
+      const list = await api('searchPatients', q.value);
+      if (my !== seq) return;
+      results.replaceChildren(...(list.length ? list.map(patientRow)
+        : [h('div', { class: 'muted' }, q.value ? 'Không tìm thấy bệnh nhân' : 'Chưa có bệnh nhân nào')]));
+    } catch (e) { results.replaceChildren(errBox(e, doSearch)); }
+  }
+  async function searchDates() {
+    if (!from.value || !to.value || from.value > to.value) return toast('Khoảng ngày không hợp lệ', 'warn');
+    visitsBox.replaceChildren(h('div', { class: 'muted' }, 'Đang lọc…'));
+    try {
+      const list = await api('searchVisitsByDate', from.value, to.value);
+      visitsBox.replaceChildren(h('div', { class: 'muted' }, list.length + ' lần khám'),
+        ...list.map(v => link('p/' + v.patient_id, h('b', {}, fmtDate(v.visit_date)), ' · ', v.full_name,
+          h('span', { class: 'badge' }, v.patient_id), h('div', { class: 'muted' }, v.diagnosis || v.treatment || ''))));
+    } catch (e) { visitsBox.replaceChildren(errBox(e, searchDates)); }
+  }
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 300); });
+
+  mount(
+    h('div', { class: 'row-actions' },
+      h('button', { class: 'primary', onclick: () => go('p/new') }, '+ Bệnh nhân'),
+      h('button', { onclick: () => go('import') }, 'Nhập dữ liệu cũ')),
+    h('section', { class: 'card' }, q, results),
+    h('section', { class: 'card' }, h('h3', {}, 'Tìm theo ngày khám'),
+      h('div', { class: 'date-range' }, 'Từ', from, 'đến', to, h('button', { onclick: searchDates }, 'Lọc')), visitsBox),
+    h('section', { class: 'card' }, h('h3', {}, 'Hẹn tái khám 7 ngày tới'), upcoming),
+    quota);
+  q.focus();
+  doSearch();
+
+  api('getUpcomingAppointments').then(list => upcoming.replaceChildren(...(list.length
+    ? list.map(a => link('p/' + a.patient_id, h('b', {}, fmtDate(a.next_appointment)), ' · ', a.full_name, ' ',
+        h('span', { class: 'muted' }, a.phone || ''), a.plan ? h('div', { class: 'muted' }, a.plan) : null))
+    : [h('div', { class: 'muted' }, 'Không có lịch hẹn')]))).catch(e => upcoming.replaceChildren(errBox(e)));
+
+  api('getStorageQuota').then(s => {
+    const pct = Math.round(s.ratio * 100);
+    quota.className = 'quota' + (s.ratio > 0.8 ? ' warn' : '');
+    quota.replaceChildren(`Dung lượng Drive: ${fmtSize(s.used)} / ${s.limit ? fmtSize(s.limit) : 'không giới hạn'} (${pct}%)`
+      + (s.ratio > 0.8 ? ' — sắp đầy, cần dọn hoặc mua thêm dung lượng' : ''),
+      h('div', { class: 'bar' }, h('i', { style: `width:${Math.min(pct, 100)}%` })));
+  }).catch(() => {});
+}
+
+/* ---------- patient ---------- */
+async function pagePatient(id) {
+  loading();
+  let data;
+  try { data = await api('getPatient', id); } catch (e) { return mount(errBox(e, () => pagePatient(id))); }
+  const p = data.patient;
+  const kv = pairs => h('dl', { class: 'kv' }, pairs.filter(x => x[1] !== '' && x[1] != null).map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  const allImages = [];
+  const visitCards = data.visits.map(v => {
+    allImages.push(...v.images);
+    return h('section', { class: 'card' },
+      h('div', { class: 'visit-head' },
+        h('div', {}, h('b', {}, fmtDate(v.visit_date)), v.reason ? ' · ' + v.reason : '',
+          v.source !== 'app' ? h('span', { class: 'badge' }, 'Dữ liệu cũ') : null),
+        h('button', { onclick: () => go('v/' + v.visit_id) }, 'Sửa / thêm ảnh')),
+      kv([['Chẩn đoán', v.diagnosis], ['Răng', v.teeth], ['Điều trị', v.treatment], ['Kế hoạch', v.plan],
+        ['Đơn thuốc', v.prescription], ['Chi phí', fmtMoney(v.cost)], ['Đã thu', fmtMoney(v.paid)],
+        ['Còn nợ', v.debt ? fmtMoney(v.debt) : ''], ['Hẹn tái khám', fmtDate(v.next_appointment)], ['Ghi chú', v.notes]]),
+      thumbGrid(v.images, () => pagePatient(id)));
+  });
+
+  mount(
+    h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Danh sách')),
+    h('section', { class: 'card' },
+      h('div', { class: 'visit-head' }, h('h2', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)),
+      p.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies) : null,
+      kv([['Ngày sinh', p.dob ? fmtDate(p.dob) : (p.birth_year || '')], ['Giới tính', p.gender], ['SĐT', p.phone],
+        ['Địa chỉ', p.address], ['Bệnh toàn thân', p.systemic_diseases], ['Thuốc đang dùng', p.current_meds],
+        ['Ghi chú', p.notes], ['Tổng còn nợ', data.total_debt ? fmtMoney(data.total_debt) : '']]),
+      h('div', { class: 'row-actions' },
+        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, '+ Lần khám'),
+        h('button', { onclick: () => go('p/' + id + '/edit') }, 'Sửa thông tin'),
+        h('button', { class: 'danger', onclick: async () => {
+          if (!confirm(`Xoá hồ sơ ${p.full_name} (${p.patient_id})? Dữ liệu vẫn còn trong Google Sheet/Drive.`)) return;
+          try { await api('deletePatient', id); toast('Đã xoá hồ sơ'); go(''); } catch (e) { toast(errMsg(e), 'error'); }
+        } }, 'Xoá hồ sơ'))),
+    h('h3', {}, `Nhật ký khám (${data.visits.length})`),
+    ...(visitCards.length ? visitCards : [h('div', { class: 'card muted' }, 'Chưa có lần khám — bấm "+ Lần khám".')]));
+  loadThumbs(allImages);
+}
+
+/* ---------- thumbnails & lightbox ---------- */
+const thumbEls = new Map();
+function thumbGrid(images, onChanged) {
+  if (!images.length) return null;
+  return h('div', { class: 'thumbs' }, images.map((img, i) => {
+    const box = h('div', { class: 'ph' }, '🖼');
+    thumbEls.set(img.image_id, box);
+    return h('button', { class: 'thumb', title: img.file_name, onclick: () => openLightbox(images, i, onChanged) },
+      box, h('span', { class: 'lbl' }, LABELS[img.label] || ''));
+  }));
+}
+async function loadThumbs(images, attempt = 0) {
+  const ids = images.map(i => i.image_id);
+  const missing = [];
+  for (let i = 0; i < ids.length; i += 20) {
+    const batch = ids.slice(i, i + 20);
+    let res;
+    try { res = await api('getThumbs', batch); } catch (e) { continue; }
+    for (const id of batch) {
+      const box = thumbEls.get(id);
+      if (!box || !box.isConnected) continue;
+      if (res[id]) box.replaceWith(h('img', { src: res[id], alt: '' }));
+      else missing.push(images.find(x => x.image_id === id));
+    }
+  }
+  // Drive needs a few seconds to generate thumbnails for fresh uploads.
+  if (missing.length && attempt < 3) setTimeout(() => loadThumbs(missing, attempt + 1), 6000 * (attempt + 1));
+}
+
+function openLightbox(images, index, onChanged) {
+  let i = index;
+  const img = h('img', { alt: '' });
+  const status = h('div', { class: 'muted' }, '');
+  const name = h('span', { class: 'grow' });
+  const label = h('select', { onchange: async () => {
+    try { await api('setImageLabel', images[i].image_id, label.value); images[i].label = label.value; toast('Đã đổi nhãn'); changed = true; }
+    catch (e) { toast(errMsg(e), 'error'); }
+  } });
+  const original = h('a', { class: 'btn', target: '_blank', rel: 'noopener' }, 'Bản gốc');
+  let changed = false;
+  const cache = new Map();
+  async function show() {
+    const cur = images[i];
+    name.textContent = `${i + 1}/${images.length} · ${cur.file_name} · ${fmtSize(cur.size_bytes)}`;
+    label.replaceChildren(...labelOptions(cur.label));
+    original.href = 'https://drive.google.com/file/d/' + encodeURIComponent(cur.image_id) + '/view';
+    img.removeAttribute('src'); status.textContent = 'Đang tải ảnh…';
+    try {
+      if (!cache.has(cur.image_id)) cache.set(cur.image_id, await api('getPreview', cur.image_id));
+      if (images[i] !== cur) return;
+      const src = cache.get(cur.image_id);
+      if (src) { img.src = src; status.textContent = ''; }
+      else status.textContent = 'Drive chưa tạo xong bản xem trước — bấm "Bản gốc" để xem.';
+    } catch (e) { status.textContent = errMsg(e); }
+  }
+  const move = d => { i = (i + d + images.length) % images.length; show(); };
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); if (changed && onChanged) onChanged(); };
+  const onKey = e => { if (e.key === 'Escape') close(); if (e.key === 'ArrowLeft') move(-1); if (e.key === 'ArrowRight') move(1); };
+  let touchX = null;
+  const box = h('div', { class: 'lightbox' },
+    h('div', { class: 'lb-top' }, name, label, original,
+      h('button', { class: 'danger', onclick: async () => {
+        if (!confirm('Xoá ảnh này? Ảnh gốc vào Thùng rác Drive (khôi phục được 30 ngày).')) return;
+        try {
+          await api('deleteImage', images[i].image_id);
+          images.splice(i, 1); changed = true; toast('Đã xoá ảnh');
+          if (!images.length) return close();
+          i = Math.min(i, images.length - 1); show();
+        } catch (e) { toast(errMsg(e), 'error'); }
+      } }, 'Xoá'),
+      h('button', { onclick: close }, '✕')),
+    h('div', { class: 'lb-img',
+      ontouchstart: e => { touchX = e.touches[0].clientX; },
+      ontouchend: e => { if (touchX == null) return; const dx = e.changedTouches[0].clientX - touchX; if (Math.abs(dx) > 50) move(dx > 0 ? -1 : 1); touchX = null; } },
+      img),
+    status,
+    images.length > 1 ? h('button', { class: 'nav prev', onclick: () => move(-1) }, '‹') : null,
+    images.length > 1 ? h('button', { class: 'nav next', onclick: () => move(1) }, '›') : null);
+  document.body.append(box);
+  document.addEventListener('keydown', onKey);
+  show();
+}
+
+/* ---------- forms ---------- */
+function formFields(defs, values) {
+  const inputs = {};
+  const els = defs.map(d => {
+    const attrs = { name: d.name, value: values[d.name] == null ? '' : values[d.name], oninput: () => { dirty = true; } };
+    let el;
+    if (d.type === 'textarea') { el = h('textarea', attrs); }
+    else if (d.type === 'select') { el = h('select', { ...attrs, onchange: attrs.oninput }, d.options.map(o => h('option', { value: o, selected: o === values[d.name] }, o || '—'))); }
+    else el = h('input', { type: d.type || 'text', ...attrs, inputmode: d.inputmode, min: d.min, required: d.required });
+    inputs[d.name] = el;
+    return h('div', { class: d.full ? 'full' : '' }, h('label', {}, d.label + (d.required ? ' *' : '')), el);
+  });
+  return { el: h('div', { class: 'grid-form' }, els), data: () => Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value])), inputs };
+}
+
+async function pagePatientForm(id) {
+  let p = {};
+  if (id) {
+    loading();
+    try { p = (await api('getPatient', id)).patient; } catch (e) { return mount(errBox(e, () => pagePatientForm(id))); }
+  }
+  const f = formFields([
+    { name: 'full_name', label: 'Họ tên', required: true, full: true },
+    { name: 'dob', label: 'Ngày sinh', type: 'date' },
+    { name: 'birth_year', label: 'Năm sinh (nếu không rõ ngày)', type: 'number', inputmode: 'numeric' },
+    { name: 'gender', label: 'Giới tính', type: 'select', options: ['', 'Nam', 'Nữ'] },
+    { name: 'phone', label: 'SĐT', type: 'tel' },
+    { name: 'address', label: 'Địa chỉ', full: true },
+    { name: 'allergies', label: 'Dị ứng', type: 'textarea' },
+    { name: 'systemic_diseases', label: 'Bệnh toàn thân', type: 'textarea' },
+    { name: 'current_meds', label: 'Thuốc đang dùng', type: 'textarea' },
+    { name: 'notes', label: 'Ghi chú', type: 'textarea' },
+  ], p);
+  const save = h('button', { class: 'primary', onclick: async () => {
+    const d = f.data();
+    if (!d.full_name.trim()) return toast('Thiếu họ tên', 'warn');
+    if (id) d.patient_id = id;
+    save.disabled = true;
+    try { const newId = await api('savePatient', d); dirty = false; toast('Đã lưu'); go('p/' + newId); }
+    catch (e) { toast(errMsg(e), 'error'); save.disabled = false; }
+  } }, 'Lưu');
+  mount(h('section', { class: 'card' }, h('h2', {}, id ? 'Sửa thông tin ' + p.patient_id : 'Bệnh nhân mới'), f.el,
+    h('div', { class: 'row-actions', style: 'margin-top:12px' }, save, h('button', { onclick: () => go(id ? 'p/' + id : '') }, 'Huỷ'))));
+  f.inputs.full_name.focus();
+}
+
+async function pageVisitForm({ patientId, visitId }) {
+  loading();
+  let visit = { visit_date: todayStr() }, patient, images = [];
+  try {
+    if (visitId) { const r = await api('getVisit', visitId); visit = r.visit; patient = r.patient; images = r.visit.images; }
+    else patient = (await api('getPatient', patientId)).patient;
+  } catch (e) { return mount(errBox(e, () => pageVisitForm({ patientId, visitId }))); }
+  patientId = patient.patient_id;
+
+  const f = formFields([
+    { name: 'visit_date', label: 'Ngày khám', type: 'date', required: true },
+    { name: 'teeth', label: 'Răng liên quan (FDI, VD 16, 46)', inputmode: 'numeric' },
+    { name: 'reason', label: 'Lý do khám', full: true },
+    { name: 'diagnosis', label: 'Chẩn đoán', type: 'textarea' },
+    { name: 'treatment', label: 'Điều trị đã làm', type: 'textarea' },
+    { name: 'plan', label: 'Kế hoạch tiếp', type: 'textarea' },
+    { name: 'prescription', label: 'Đơn thuốc', type: 'textarea' },
+    { name: 'cost', label: 'Chi phí (VNĐ)', type: 'number', inputmode: 'numeric', min: 0 },
+    { name: 'paid', label: 'Đã thu (VNĐ)', type: 'number', inputmode: 'numeric', min: 0 },
+    { name: 'next_appointment', label: 'Hẹn tái khám', type: 'date' },
+    { name: 'notes', label: 'Ghi chú', type: 'textarea' },
+  ], visit);
+  const debt = h('div', { class: 'muted' });
+  const updDebt = () => { const d = (Number(f.inputs.cost.value) || 0) - (Number(f.inputs.paid.value) || 0); debt.textContent = d ? 'Còn nợ: ' + fmtMoney(d) : ''; };
+  f.inputs.cost.addEventListener('input', updDebt); f.inputs.paid.addEventListener('input', updDebt); updDebt();
+
+  const existing = h('div', {}, thumbGrid(images, () => go('v/' + visitId, false)));
+  const uploader = createUploader({
+    getVisitId: () => visitId,
+    onUploaded: imgs => {
+      images.push(...imgs);
+      existing.replaceChildren(thumbGrid(images, () => go('v/' + visitId, false)) || '');
+      loadThumbs(imgs);
+    },
+  });
+
+  const title = h('h2', {}, visitId ? 'Sửa lần khám' : 'Lần khám mới');
+  const save = h('button', { class: 'primary', onclick: doSave }, 'Lưu');
+  async function doSave() {
+    const d = f.data();
+    if (!d.visit_date) return toast('Thiếu ngày khám', 'warn');
+    save.disabled = true;
+    try {
+      const id = await api('saveVisit', { ...d, visit_id: visitId, patient_id: patientId });
+      dirty = false;
+      if (!visitId) { // stay on this page as "edit" so queued photos keep their progress
+        visitId = id;
+        title.textContent = 'Sửa lần khám';
+        google.script.history.replace({ path: 'v/' + id }, null, 'v/' + id);
+      }
+      if (uploader.pendingCount()) {
+        toast('Đã lưu, đang tải ảnh…');
+        const r = await uploader.startAll();
+        if (r.failed) { save.disabled = false; return toast(`${r.failed} ảnh lỗi — bấm "Tải lại ảnh lỗi"`, 'error'); }
+      }
+      toast('Đã lưu');
+      go('p/' + patientId);
+    } catch (e) { toast(errMsg(e), 'error'); save.disabled = false; }
+  }
+
+  mount(
+    h('div', { class: 'row-actions' }, h('button', { onclick: () => go('p/' + patientId) }, '← ' + patient.full_name)),
+    patient.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + patient.allergies) : null,
+    h('section', { class: 'card' }, title, h('div', { class: 'muted' }, patient.full_name + ' · ' + patient.patient_id), f.el, debt),
+    h('section', { class: 'card' }, h('h3', {}, 'Ảnh chụp'), existing, uploader.el),
+    h('div', { class: 'row-actions' }, save, h('button', { onclick: () => go('p/' + patientId) }, 'Huỷ'),
+      visitId ? h('button', { class: 'danger', onclick: async () => {
+        if (!confirm('Xoá lần khám này?')) return;
+        try { await api('deleteVisit', visitId); toast('Đã xoá lần khám'); dirty = false; go('p/' + patientId); } catch (e) { toast(errMsg(e), 'error'); }
+      } }, 'Xoá lần khám') : null));
+  loadThumbs(images);
+}
+</script>

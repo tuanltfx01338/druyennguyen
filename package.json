@@ -1,0 +1,16 @@
+{
+  "name": "so-benh-an-nha-khoa",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sổ bệnh án Nha khoa — Google Apps Script web app",
+  "scripts": {
+    "test": "node --test test/lib.test.js test/server.test.js",
+    "test:ui": "node --test test/ui.smoke.js",
+    "push": "clasp push",
+    "deployments": "clasp deployments"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2",
+    "jsdom": "^24.1.3"
+  }
+}

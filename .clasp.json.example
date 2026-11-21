@@ -1,0 +1,4 @@
+{
+  "scriptId": "<SCRIPT_ID — tạo bằng: npx clasp create --type standalone --title \"So benh an Nha khoa\" --rootDir src>",
+  "rootDir": "src"
+}

@@ -1,0 +1,130 @@
+// UI smoke test: real client code in jsdom, google.script.run wired to the real server code on GAS fakes.
+// Run: npm run test:ui   (needs devDependency jsdom)
+process.env.TZ = 'Asia/Ho_Chi_Minh';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { JSDOM } = require('jsdom');
+const { createGas } = require('./gas-mock');
+
+const SRC = path.join(__dirname, '../src');
+function loadServer(opts) {
+  const gas = createGas(opts);
+  const ctx = vm.createContext({ ...gas, Date, JSON, Math, Object, Array, String, Number });
+  for (const f of ['Lib', 'Repo', 'Main', 'Patients', 'Visits', 'Images', 'Import', 'Backup'])
+    vm.runInContext(fs.readFileSync(path.join(SRC, 'server', f + '.gs'), 'utf8'), ctx);
+  ctx.setup();
+  return ctx;
+}
+
+function buildHtml() {
+  return fs.readFileSync(path.join(SRC, 'client/Index.html'), 'utf8')
+    .replace(/<\?!= include\('client\/([\w.]+)'\); \?>/g, (_, f) => fs.readFileSync(path.join(SRC, 'client', f + '.html'), 'utf8'));
+}
+
+function boot(server) {
+  const calls = [];
+  const dom = new JSDOM(buildHtml(), {
+    runScripts: 'dangerously', pretendToBeVisual: true,
+    beforeParse(w) {
+      const runner = (ok = () => {}, fail = () => {}) => new Proxy({}, {
+        get: (_, fn) => {
+          if (fn === 'withSuccessHandler') return h => runner(h, fail);
+          if (fn === 'withFailureHandler') return h => runner(ok, h);
+          return (...args) => setTimeout(() => {
+            calls.push(fn);
+            try { ok(JSON.parse(JSON.stringify(server[fn](...JSON.parse(JSON.stringify(args))) ?? null))); }
+            catch (e) { fail(new w.Error(e.message)); }
+          }, 1);
+        },
+      });
+      w.google = { script: {
+        run: runner(),
+        history: { push() {}, replace() {}, setChangeHandler() {} },
+        url: { getLocation: cb => cb({ hash: '' }) },
+      } };
+      w.confirm = () => true;
+      w.scrollTo = () => {};
+      w.fetch = () => Promise.reject(new TypeError('Failed to fetch')); // simulate CORS block → server fallback
+    },
+  });
+  return { w: dom.window, d: dom.window.document, calls };
+}
+
+const until = async (fn, ms = 4000) => {
+  const t = Date.now();
+  for (;;) { const v = fn(); if (v) return v; if (Date.now() - t > ms) throw new Error('timeout: ' + fn); await new Promise(r => setTimeout(r, 10)); }
+};
+const btn = (d, text) => [...d.querySelectorAll('button')].find(b => b.textContent.includes(text));
+const set = (w, el, v) => { el.value = v; el.dispatchEvent(new w.Event('input')); };
+
+test('create patient → visit with 2 original photos (server-chunk fallback) → see thumbs, debt, allergy; search', async () => {
+  const server = loadServer();
+  const { w, d, calls } = boot(server);
+  await until(() => btn(d, '+ Bệnh nhân'));
+  await until(() => d.body.textContent.includes('Chưa có bệnh nhân nào'));
+
+  btn(d, '+ Bệnh nhân').click();
+  await until(() => d.querySelector('[name=full_name]'));
+  set(w, d.querySelector('[name=full_name]'), 'Nguyễn Văn An');
+  set(w, d.querySelector('[name=allergies]'), 'Penicillin');
+  btn(d, 'Lưu').click();
+  await until(() => d.querySelector('.alert') && d.querySelector('.alert').textContent.includes('Penicillin'));
+
+  btn(d, '+ Lần khám').click();
+  await until(() => d.querySelector('[name=visit_date]'));
+  set(w, d.querySelector('[name=cost]'), '800000');
+  set(w, d.querySelector('[name=paid]'), '500000');
+  assert.match(d.body.textContent, /Còn nợ: 300\.000/);
+
+  const big = new w.File([new Uint8Array(5 * 1024 * 1024 + 123)], 'IMG_big.jpg', { type: 'image/jpeg' });
+  const small = new w.File([new Uint8Array(1000)], 'xray.png', { type: 'image/png' });
+  const input = d.querySelector('input[type=file]');
+  Object.defineProperty(input, 'files', { value: [big, small], configurable: true });
+  input.dispatchEvent(new w.Event('change'));
+  assert.equal(d.querySelectorAll('.upload-list .up').length, 2);
+
+  btn(d, 'Lưu').click();
+  await until(() => d.body.textContent.includes('Nhật ký khám (1)'), 10000);
+  await until(() => d.querySelectorAll('.thumbs img').length === 2);
+  assert.match(d.body.textContent, /Tổng còn nợ300\.000/);
+  assert.ok(calls.filter(c => c === 'uploadChunk').length >= 4, 'big file sent in 2 MB chunks');
+  const imgs = server.readActive_('Images');
+  assert.equal(imgs.length, 2);
+  assert.equal(Math.max(...imgs.map(i => i.size_bytes)), 5 * 1024 * 1024 + 123); // original size kept
+
+  btn(d, 'Danh sách').click();
+  const q = await until(() => d.querySelector('input.search'));
+  set(w, q, 'nguyen van an');
+  await until(() => [...d.querySelectorAll('.list .item b')].some(b => b.textContent === 'Nguyễn Văn An'));
+
+  // lightbox opens with a preview
+  [...d.querySelectorAll('.list .item')].find(a => a.textContent.includes('Nguyễn Văn An')).click();
+  await until(() => d.querySelectorAll('.thumbs img').length === 2);
+  d.querySelector('.thumb').click();
+  await until(() => d.querySelector('.lightbox img[src^="data:image"]'));
+  w.close();
+});
+
+test('import wizard: preview shows counts, blocks on errors, commits', async () => {
+  const fixture = [
+    ['BenhNhan', [['x'], ['STT *', '', 'Họ tên *'], [1, '', 'Lê Văn C', '', 1980], [2, '', 'Võ D']]],
+    ['LanKham', [['x'], ['STT BN *', '', 'Ngày khám *'], [1, 'Lê Văn C', new Date(2023, 5, 1), 'Cạo vôi']]],
+  ];
+  const server = loadServer({ importFixture: () => JSON.parse(JSON.stringify(fixture), (k, v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v) : v)) });
+  const { w, d } = boot(server);
+  await until(() => btn(d, 'Nhập dữ liệu cũ'));
+  btn(d, 'Nhập dữ liệu cũ').click();
+  const fi = await until(() => d.querySelector('input[type=file][accept=".xlsx"]'));
+  Object.defineProperty(fi, 'files', { value: [new w.File([new Uint8Array(10)], 'mau.xlsx')], configurable: true });
+  btn(d, 'Xem trước').click();
+  const commit = await until(() => btn(d, 'Xác nhận nhập 2 bệnh nhân'));
+  assert.match(d.body.textContent, /Lần khám: 1/);
+  assert.equal(server.readActive_('Patients').length, 0);
+  commit.click();
+  await until(() => d.body.textContent.includes('Xong: tạo 2 hồ sơ'));
+  assert.deepEqual(server.readActive_('Patients').map(p => p.patient_id).sort(), ['NK23-0001', 'NK' + String(new Date().getFullYear()).slice(-2) + '-0001'].sort());
+  w.close();
+});

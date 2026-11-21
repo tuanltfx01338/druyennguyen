@@ -1,0 +1,105 @@
+<script>
+'use strict';
+/* Import wizard: B1 file xlsx → B2 dry-run report → B3 ghi theo lô → B4/B5 ghép & di chuyển ảnh cũ. */
+function pageImport() {
+  const fileInput = h('input', { type: 'file', accept: '.xlsx' });
+  const step1 = h('section', { class: 'card' },
+    h('h3', {}, 'B1. Chọn file Excel theo mẫu Mau_nhap_benh_nhan_cu.xlsx'),
+    h('div', { class: 'muted' }, 'Đã xoá dòng VÍ DỤ. Chưa ghi gì vào dữ liệu cho tới khi bạn bấm xác nhận ở B2.'),
+    fileInput, h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { class: 'primary', onclick: preview }, 'Xem trước')));
+  const step2 = h('section', { class: 'card hidden' });
+  const step3 = h('section', { class: 'card' },
+    h('h3', {}, 'Ảnh cũ'),
+    h('div', { class: 'muted' }, 'Chép các thư mục ảnh (tên dạng 0001_Nguyen Van An) vào Google Drive: NhaKhoa/_import/, rồi bấm Kiểm tra. Ảnh được DI CHUYỂN (không nhân đôi dung lượng), giữ bản gốc.'),
+    h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { onclick: matchImages }, 'Kiểm tra thư mục ảnh')));
+  const step4 = h('div');
+  mount(h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Trang chủ')), h('h2', {}, 'Nhập dữ liệu cũ'), step1, step2, step3, step4);
+
+  async function preview() {
+    const file = fileInput.files[0];
+    if (!file) return toast('Chọn file .xlsx', 'warn');
+    if (file.size > 10 * 1048576) return toast('File quá lớn (>10 MB)', 'warn');
+    step2.classList.remove('hidden');
+    step2.replaceChildren(h('div', { class: 'muted' }, 'Đang đọc file…'));
+    let r;
+    try { r = await api('importPreview', file.name, await blobToBase64(file)); }
+    catch (e) { return step2.replaceChildren(errBox(e, preview)); }
+    const rows = list => h('table', { class: 'report' }, h('tr', {}, h('th', {}, 'Sheet'), h('th', {}, 'Dòng'), h('th', {}, 'Nội dung')),
+      list.map(x => h('tr', {}, h('td', {}, x.sheet), h('td', {}, x.row), h('td', {}, x.message))));
+    const commitBtn = h('button', { class: 'primary', disabled: r.errorCount > 0 || r.newPatients === 0,
+      onclick: () => commit(r.runId, commitBtn) }, `Xác nhận nhập ${r.newPatients} bệnh nhân`);
+    step2.replaceChildren(
+      h('h3', {}, 'B2. Kết quả kiểm tra (chưa ghi dữ liệu)'),
+      h('div', {}, `Bệnh nhân mới: ${r.newPatients} · Lần khám: ${r.newVisits} · Đã có trước (bỏ qua): ${r.skippedExisting}`),
+      r.errorCount ? h('div', { class: 'alert' }, `${r.errorCount} lỗi — sửa trong Excel rồi chọn lại file. Chưa thể nhập khi còn lỗi.`) : null,
+      r.errorCount ? rows(r.errors) : null,
+      r.warnings.length ? h('div', { class: 'muted' }, 'Lưu ý:') : null,
+      r.warnings.length ? rows(r.warnings) : null,
+      h('div', { class: 'row-actions', style: 'margin-top:8px' }, commitBtn));
+  }
+
+  async function commit(runId, btn) {
+    btn.disabled = true;
+    const prog = h('div', { class: 'muted' }, 'Đang nhập…');
+    btn.after(prog);
+    let offset = 0, created = 0, skipped = 0;
+    try {
+      for (;;) {
+        const r = await api('importCommit', runId, offset);
+        created += r.created; skipped += r.skipped; offset = r.next;
+        prog.textContent = `Đã xử lý ${r.next}/${r.total} bệnh nhân…`;
+        if (r.done) break;
+      }
+      prog.textContent = `✓ Xong: tạo ${created} hồ sơ, bỏ qua ${skipped} hồ sơ đã có.`;
+      toast('Nhập xong');
+    } catch (e) {
+      prog.textContent = `Dừng ở ${offset}: ${errMsg(e)}. Bấm lại để chạy tiếp (không tạo trùng).`;
+      btn.disabled = false; // its click handler re-runs commit from 0; done patients are skipped by STT
+    }
+  }
+
+  async function matchImages() {
+    step4.replaceChildren(h('div', { class: 'card muted' }, 'Đang kiểm tra…'));
+    let r;
+    try { r = await api('importImagesMatch'); } catch (e) { return step4.replaceChildren(errBox(e, matchImages)); }
+    const manual = new Map();
+    const unmatchedRows = r.unmatched.map(u => {
+      const inp = h('input', { placeholder: 'Mã BN, VD NK26-0001', style: 'max-width:200px', oninput: () => manual.set(u.folderId, inp.value.trim().toUpperCase()) });
+      return h('tr', {}, h('td', {}, u.folder), h('td', {}, u.imageCount), h('td', {}, inp));
+    });
+    const runBtn = h('button', { class: 'primary', onclick: () => moveAll(r, manual, runBtn) }, 'Di chuyển ảnh vào hồ sơ');
+    step4.replaceChildren(h('section', { class: 'card' },
+      h('h3', {}, `Khớp: ${r.matched.length} thư mục · Không khớp: ${r.unmatched.length}`),
+      r.matched.length ? h('table', { class: 'report' }, h('tr', {}, h('th', {}, 'Thư mục'), h('th', {}, 'Số ảnh'), h('th', {}, 'Hồ sơ')),
+        r.matched.map(m => h('tr', {}, h('td', {}, m.folder), h('td', {}, m.imageCount), h('td', {}, m.patient_id + ' ' + m.full_name)))) : null,
+      r.unmatched.length ? h('div', { style: 'margin-top:10px' }, h('b', {}, 'Không khớp — nhập mã BN để gán tay (để trống = bỏ qua):'),
+        h('table', { class: 'report' }, h('tr', {}, h('th', {}, 'Thư mục'), h('th', {}, 'Số ảnh'), h('th', {}, 'Mã BN')), unmatchedRows)) : null,
+      h('div', { class: 'row-actions', style: 'margin-top:8px' }, runBtn)));
+  }
+
+  async function moveAll(r, manual, btn) {
+    const jobs = r.matched.map(m => ({ folderId: m.folderId, folder: m.folder, patientId: m.patient_id }))
+      .concat(r.unmatched.filter(u => manual.get(u.folderId)).map(u => ({ folderId: u.folderId, folder: u.folder, patientId: manual.get(u.folderId) })));
+    if (!jobs.length) return toast('Không có thư mục nào để chuyển', 'warn');
+    if (!confirm(`Di chuyển ảnh của ${jobs.length} thư mục vào hồ sơ?`)) return;
+    btn.disabled = true;
+    const log = h('div', { class: 'muted' });
+    const cur = h('div', { class: 'muted' });
+    btn.after(cur, log);
+    uploadBusy = true;
+    let ok = 0;
+    for (const j of jobs) {
+      try {
+        let moved = 0, res;
+        do { res = await api('importImagesMove', j.folderId, j.patientId); moved += res.moved; cur.textContent = `${j.folder}: ${moved} ảnh…`; }
+        while (!res.done && res.moved > 0);
+        ok++;
+        log.append(h('div', {}, `✓ ${j.folder} → ${j.patientId}: ${moved} ảnh` + (res.leftoverNonImages ? ' (còn file không phải ảnh, để lại trong _import)' : '')));
+      } catch (e) { log.append(h('div', { class: 'err' }, `✗ ${j.folder}: ${errMsg(e)}`)); }
+    }
+    uploadBusy = false;
+    cur.textContent = '';
+    toast(`Xong ${ok}/${jobs.length} thư mục`);
+  }
+}
+</script>

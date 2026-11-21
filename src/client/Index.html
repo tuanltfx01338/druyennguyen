@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('client/Styles'); ?>
+</head>
+<body>
+  <header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án Nha khoa</a></header>
+  <main id="app"></main>
+  <div id="toast" role="status"></div>
+  <?!= include('client/App.js'); ?>
+  <?!= include('client/Upload.js'); ?>
+  <?!= include('client/Import.js'); ?>
+  <script>start();</script>
+</body>
+</html>

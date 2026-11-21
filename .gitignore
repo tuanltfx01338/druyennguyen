@@ -1,0 +1,7 @@
+node_modules/
+.clasp.json
+.clasprc.json
+# Never commit real patient data
+*.xlsx
+*.csv
+data/

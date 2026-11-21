@@ -1,0 +1,155 @@
+<script>
+'use strict';
+/*
+ * Uploads ORIGINAL photos (no compression) straight from the browser to Drive (resumable upload).
+ * If the browser → googleapis call is blocked (CORS) the uploader switches, once per session,
+ * to the server path: 2 MB chunks via google.script.run → UrlFetchApp.
+ */
+const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size';
+const CHUNK = 2 * 1024 * 1024; // must be a multiple of 256 KB for Drive resumable uploads
+const PARALLEL = 3;
+let directUploadOk = null; // null = untested, true/false after first attempt
+
+const corsError = msg => Object.assign(new Error(msg), { cors: true });
+
+async function uploadDirect(item, ctx) {
+  let res;
+  try {
+    res = await fetch(DRIVE_UPLOAD, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + ctx.token,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': item.file.type || 'application/octet-stream',
+        'X-Upload-Content-Length': String(item.file.size),
+      },
+      body: JSON.stringify({ name: item.file.name, parents: [ctx.folderId] }),
+    });
+  } catch (e) { throw corsError('Trình duyệt chặn gọi trực tiếp Drive'); }
+  if (!res.ok) throw new Error('Drive từ chối (' + res.status + ')');
+  const loc = res.headers.get('Location');
+  if (!loc) throw corsError('Không đọc được phiên upload');
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', loc);
+    xhr.upload.onprogress = e => { if (e.lengthComputable) item.setProgress(e.loaded / e.total); };
+    xhr.onload = () => (xhr.status === 200 || xhr.status === 201)
+      ? resolve(JSON.parse(xhr.responseText)) : reject(new Error('Upload lỗi (' + xhr.status + ')'));
+    xhr.onerror = () => reject(corsError('Mất kết nối khi tải ảnh'));
+    xhr.send(item.file);
+  });
+}
+
+async function uploadViaServer(item, ctx) {
+  const url = await api('startServerUpload', ctx.folderId, item.file.name, item.file.type, item.file.size);
+  let start = 0;
+  while (start < item.file.size) {
+    const blob = item.file.slice(start, start + CHUNK);
+    const r = await api('uploadChunk', url, await blobToBase64(blob), start, item.file.size);
+    start += blob.size;
+    item.setProgress(start / item.file.size);
+    if (r.done) return r.file;
+  }
+  throw new Error('Upload chưa hoàn tất');
+}
+
+function createUploader({ getVisitId, onUploaded }) {
+  const items = [];
+  const list = h('div', { class: 'upload-list' });
+  const batchLabel = h('select', { style: 'width:auto' }, labelOptions('khac'));
+  const input = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden' });
+  const retryBtn = h('button', { type: 'button', class: 'hidden', onclick: () => startAll() }, 'Tải lại ảnh lỗi');
+  const note = h('div', { class: 'muted' });
+
+  input.addEventListener('change', () => {
+    for (const f of input.files) if (f.size > 0) add(f);
+    input.value = '';
+    if (getVisitId()) startAll(); else note.textContent = 'Ảnh sẽ tải lên khi bấm Lưu.';
+  });
+
+  function add(file) {
+    const item = { file, label: batchLabel.value, status: 'queued', progress: 0 };
+    const bar = h('i');
+    const st = h('span', { class: 'muted' });
+    const sel = h('select', { style: 'width:auto', onchange: () => { item.label = sel.value; } }, labelOptions(item.label));
+    const rm = h('button', { type: 'button', onclick: () => { items.splice(items.indexOf(item), 1); row.remove(); refresh(); } }, '✕');
+    const row = h('div', { class: 'up' }, h('div', {}, item.file.name + ' · ' + fmtSize(item.file.size)), h('div', {}, sel, ' ', rm),
+      h('div', { class: 'bar' }, bar), st);
+    item.setProgress = p => { item.progress = p; bar.style.width = Math.round(p * 100) + '%'; st.textContent = Math.round(p * 100) + '%'; };
+    item.render = () => {
+      row.className = 'up ' + item.status;
+      sel.disabled = rm.disabled = item.status === 'uploading' || item.status === 'done';
+      if (item.status === 'done') st.textContent = '✓ Đã tải';
+      if (item.status === 'error') st.textContent = '✗ ' + item.error;
+      if (item.status === 'queued') st.textContent = 'Chờ tải';
+    };
+    item.render();
+    items.push(item);
+    list.append(row);
+    dirty = true;
+  }
+
+  function refresh() {
+    retryBtn.classList.toggle('hidden', !items.some(i => i.status === 'error' || i.status === 'uploaded'));
+  }
+
+  async function uploadOne(item, ctx) {
+    item.status = 'uploading'; item.render();
+    try {
+      let file = null;
+      if (directUploadOk !== false) {
+        try { file = await uploadDirect(item, ctx); directUploadOk = true; }
+        catch (e) { if (directUploadOk === true || !e.cors) throw e; directUploadOk = false; item.setProgress(0); }
+      }
+      if (!file) file = await uploadViaServer(item, ctx);
+      item.driveFile = file; item.status = 'uploaded';
+    } catch (e) { item.status = 'error'; item.error = errMsg(e); }
+    item.render();
+  }
+
+  let running = null;
+  async function startAll() {
+    if (running) return running;
+    running = (async () => {
+      const todo = items.filter(i => i.status === 'queued' || i.status === 'error');
+      uploadBusy = true;
+      try {
+        if (todo.length) {
+          const ctx = await api('getUploadContext', getVisitId());
+          const queue = todo.slice();
+          await Promise.all(Array.from({ length: Math.min(PARALLEL, queue.length) }, async () => {
+            while (queue.length) await uploadOne(queue.shift(), ctx);
+          }));
+        }
+        const toRegister = items.filter(i => i.status === 'uploaded');
+        if (toRegister.length) {
+          const imgs = await api('registerImages', getVisitId(), toRegister.map(i => ({ id: i.driveFile.id, label: i.label })));
+          toRegister.forEach(i => { i.status = 'done'; i.render(); });
+          onUploaded(imgs);
+        }
+      } catch (e) {
+        items.filter(i => i.status !== 'done').forEach(i => { if (i.status !== 'uploaded') { i.status = 'error'; i.error = i.error || errMsg(e); i.render(); } });
+        toast(errMsg(e), 'error');
+      } finally {
+        uploadBusy = false;
+        running = null;
+        refresh();
+        note.textContent = '';
+        if (!items.some(i => i.status !== 'done')) dirty = false;
+      }
+      return { failed: items.filter(i => i.status !== 'done').length };
+    })();
+    return running;
+  }
+
+  return {
+    el: h('div', {},
+      h('div', { class: 'row-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: () => input.click() }, '📷 Chụp / chọn ảnh'),
+        h('span', { class: 'muted', style: 'align-self:center' }, 'Nhãn:'), batchLabel, retryBtn),
+      input, note, list),
+    pendingCount: () => items.filter(i => i.status !== 'done').length,
+    startAll,
+  };
+}
+</script>
