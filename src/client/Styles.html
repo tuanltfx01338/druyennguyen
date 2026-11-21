@@ -52,4 +52,14 @@
   .lightbox .nav { position:absolute; top:50%; transform:translateY(-50%); font-size:30px; background:rgba(255,255,255,.15); color:#fff; border:0; }
   .lightbox .prev { left:8px; } .lightbox .next { right:8px; }
   table.report { width:100%; border-collapse:collapse; font-size:14px; } table.report td, table.report th { border-bottom:1px solid #eef1f2; padding:5px; text-align:left; }
+  .tabs { display:flex; gap:6px; position:sticky; top:44px; z-index:4; background:#f5f7f8; padding:6px 0 10px; overflow-x:auto; }
+  .tab { flex:1; white-space:nowrap; font-weight:600; }
+  .tab.active, .chip.active { background:var(--pri); color:#fff; border-color:var(--pri); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .chip { padding:5px 12px; border-radius:16px; font-size:14px; }
+  details.visit > summary { cursor:pointer; list-style:none; }
+  details.visit > summary::-webkit-details-marker { display:none; }
+  details.visit > summary::after { content:'▾ Xem chi tiết'; display:block; font-size:12px; color:var(--pri); margin-top:4px; }
+  details.visit[open] > summary::after { content:'▴ Thu gọn'; }
+  .visit-sum .badge { margin-left:6px; }
 </style>

@@ -153,59 +153,110 @@ function pageHome() {
 }
 
 /* ---------- patient ---------- */
-async function pagePatient(id) {
+const kv = pairs => h('dl', { class: 'kv' }, pairs.filter(x => x[1] !== '' && x[1] != null).map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+
+/** Patient record with 3 tabs: Lịch sử khám · Hình ảnh · Thông tin. */
+async function pagePatient(id, tab = 'history', labelFilter = '') {
   loading();
   let data;
-  try { data = await api('getPatient', id); } catch (e) { return mount(errBox(e, () => pagePatient(id))); }
+  try { data = await api('getPatient', id); } catch (e) { return mount(errBox(e, () => pagePatient(id, tab))); }
   const p = data.patient;
-  const kv = pairs => h('dl', { class: 'kv' }, pairs.filter(x => x[1] !== '' && x[1] != null).map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
-  const allImages = [];
-  const visitCards = data.visits.map(v => {
-    allImages.push(...v.images);
-    return h('section', { class: 'card' },
+  data.visits.forEach(v => v.images.forEach(i => { i.visit_date = v.visit_date; }));
+  const allImages = data.visits.flatMap(v => v.images);
+  let current = tab, filter = labelFilter;
+  const reload = () => pagePatient(id, current, filter);
+
+  const tabDefs = [['history', `Lịch sử khám (${data.visits.length})`], ['images', `Hình ảnh (${allImages.length})`], ['info', 'Thông tin']];
+  const tabBtns = {};
+  const body = h('div');
+  const show = k => {
+    current = k;
+    Object.entries(tabBtns).forEach(([kk, b]) => b.classList.toggle('active', kk === k));
+    body.replaceChildren(...(k === 'history' ? historyTab() : k === 'images' ? imagesTab() : infoTab()));
+  };
+
+  function historyTab() {
+    if (!data.visits.length) return [h('div', { class: 'card muted' }, 'Chưa có lần khám — bấm "+ Lần khám".')];
+    return data.visits.map((v, idx) => {
+      const grid = thumbGrid(v.images, reload);
+      const det = h('details', { class: 'card visit', open: idx === 0,
+        ontoggle: () => { if (det.open && !det.dataset.loaded) { det.dataset.loaded = '1'; loadThumbs(v.images); } } },
+        h('summary', {},
+          h('div', { class: 'visit-sum' },
+            h('b', {}, fmtDate(v.visit_date)), v.reason ? ' · ' + v.reason : '',
+            v.images.length ? h('span', { class: 'badge' }, '📷 ' + v.images.length) : null,
+            v.debt ? h('span', { class: 'badge red' }, 'Nợ ' + fmtMoney(v.debt)) : null,
+            v.source !== 'app' ? h('span', { class: 'badge' }, 'Dữ liệu cũ') : null),
+          v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null),
+        kv([['Chẩn đoán', v.diagnosis], ['Răng', v.teeth], ['Điều trị', v.treatment], ['Kế hoạch', v.plan],
+          ['Đơn thuốc', v.prescription], ['Chi phí', fmtMoney(v.cost)], ['Đã thu', fmtMoney(v.paid)],
+          ['Còn nợ', v.debt ? fmtMoney(v.debt) : ''], ['Hẹn tái khám', fmtDate(v.next_appointment)], ['Ghi chú', v.notes]]),
+        grid || h('div', { class: 'muted' }, 'Chưa có ảnh'),
+        h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { onclick: () => go('v/' + v.visit_id) }, 'Sửa / thêm ảnh')));
+      if (idx === 0) { det.dataset.loaded = '1'; setTimeout(() => loadThumbs(v.images)); }
+      return det;
+    });
+  }
+
+  function imagesTab() {
+    if (!allImages.length) return [h('div', { class: 'card muted' }, 'Chưa có ảnh nào. Thêm ảnh trong từng lần khám.')];
+    const count = k => allImages.filter(i => !k || i.label === k).length;
+    const chips = h('div', { class: 'chips' }, [['', 'Tất cả'], ...Object.entries(LABELS)].map(([k, label]) =>
+      count(k) ? h('button', { class: 'chip' + (filter === k ? ' active' : ''), onclick: () => { filter = k; show('images'); } }, `${label} (${count(k)})`) : null));
+    const list = allImages.filter(i => !filter || i.label === filter); // lightbox swipes across all visits
+    const groups = data.visits.map(v => ({ v, imgs: list.filter(i => i.visit_id === v.visit_id) })).filter(g => g.imgs.length);
+    const out = [chips, ...groups.map(g => h('section', { class: 'card' },
       h('div', { class: 'visit-head' },
-        h('div', {}, h('b', {}, fmtDate(v.visit_date)), v.reason ? ' · ' + v.reason : '',
-          v.source !== 'app' ? h('span', { class: 'badge' }, 'Dữ liệu cũ') : null),
-        h('button', { onclick: () => go('v/' + v.visit_id) }, 'Sửa / thêm ảnh')),
-      kv([['Chẩn đoán', v.diagnosis], ['Răng', v.teeth], ['Điều trị', v.treatment], ['Kế hoạch', v.plan],
-        ['Đơn thuốc', v.prescription], ['Chi phí', fmtMoney(v.cost)], ['Đã thu', fmtMoney(v.paid)],
-        ['Còn nợ', v.debt ? fmtMoney(v.debt) : ''], ['Hẹn tái khám', fmtDate(v.next_appointment)], ['Ghi chú', v.notes]]),
-      thumbGrid(v.images, () => pagePatient(id)));
-  });
+        h('div', {}, h('b', {}, fmtDate(g.v.visit_date)), g.v.reason ? ' · ' + g.v.reason : '', h('span', { class: 'muted' }, ` (${g.imgs.length})`)),
+        h('button', { onclick: () => go('v/' + g.v.visit_id) }, 'Lần khám')),
+      thumbGrid(g.imgs, reload, list, list.indexOf(g.imgs[0]))))];
+    setTimeout(() => loadThumbs(list));
+    return out;
+  }
+
+  function infoTab() {
+    return [h('section', { class: 'card' },
+      kv([['Mã BN', p.patient_id], ['Ngày sinh', p.dob ? fmtDate(p.dob) : (p.birth_year || '')], ['Giới tính', p.gender], ['SĐT', p.phone],
+        ['Địa chỉ', p.address], ['Dị ứng', p.allergies], ['Bệnh toàn thân', p.systemic_diseases], ['Thuốc đang dùng', p.current_meds],
+        ['Ghi chú', p.notes], ['Tổng còn nợ', data.total_debt ? fmtMoney(data.total_debt) : '']]),
+      h('div', { class: 'row-actions' },
+        h('button', { onclick: () => go('p/' + id + '/edit') }, 'Sửa thông tin'),
+        h('button', { class: 'danger', onclick: async () => {
+          if (!confirm(`Xoá hồ sơ ${p.full_name} (${p.patient_id})? Dữ liệu vẫn còn trong Google Sheet/Drive.`)) return;
+          try { await api('deletePatient', id); toast('Đã xoá hồ sơ'); go(''); } catch (e) { toast(errMsg(e), 'error'); }
+        } }, 'Xoá hồ sơ')))];
+  }
 
   mount(
     h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Danh sách')),
     h('section', { class: 'card' },
       h('div', { class: 'visit-head' }, h('h2', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)),
+      h('div', { class: 'muted' }, [p.dob ? fmtDate(p.dob) : (p.birth_year ? 'Sinh ' + p.birth_year : ''), p.gender, p.phone].filter(Boolean).join(' · ')),
       p.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies) : null,
-      kv([['Ngày sinh', p.dob ? fmtDate(p.dob) : (p.birth_year || '')], ['Giới tính', p.gender], ['SĐT', p.phone],
-        ['Địa chỉ', p.address], ['Bệnh toàn thân', p.systemic_diseases], ['Thuốc đang dùng', p.current_meds],
-        ['Ghi chú', p.notes], ['Tổng còn nợ', data.total_debt ? fmtMoney(data.total_debt) : '']]),
-      h('div', { class: 'row-actions' },
-        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, '+ Lần khám'),
-        h('button', { onclick: () => go('p/' + id + '/edit') }, 'Sửa thông tin'),
-        h('button', { class: 'danger', onclick: async () => {
-          if (!confirm(`Xoá hồ sơ ${p.full_name} (${p.patient_id})? Dữ liệu vẫn còn trong Google Sheet/Drive.`)) return;
-          try { await api('deletePatient', id); toast('Đã xoá hồ sơ'); go(''); } catch (e) { toast(errMsg(e), 'error'); }
-        } }, 'Xoá hồ sơ'))),
-    h('h3', {}, `Nhật ký khám (${data.visits.length})`),
-    ...(visitCards.length ? visitCards : [h('div', { class: 'card muted' }, 'Chưa có lần khám — bấm "+ Lần khám".')]));
-  loadThumbs(allImages);
+      p.systemic_diseases ? h('div', { class: 'muted' }, 'Bệnh toàn thân: ' + p.systemic_diseases) : null,
+      data.total_debt ? h('div', { style: 'color:var(--red);font-weight:600;margin-top:4px' }, 'Tổng còn nợ: ' + fmtMoney(data.total_debt)) : null,
+      h('div', { class: 'row-actions', style: 'margin:8px 0 0' },
+        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, '+ Lần khám'))),
+    h('div', { class: 'tabs' }, tabDefs.map(([k, label]) => (tabBtns[k] = h('button', { class: 'tab', onclick: () => show(k) }, label)))),
+    body);
+  show(current);
 }
 
 /* ---------- thumbnails & lightbox ---------- */
 const thumbEls = new Map();
-function thumbGrid(images, onChanged) {
+const thumbCache = new Map(); // image_id → data URL, so switching tabs does not refetch
+/** `list`/`offset`: the lightbox swipes through `list` (e.g. all photos of the patient), starting at offset + i. */
+function thumbGrid(images, onChanged, list = images, offset = 0) {
   if (!images.length) return null;
   return h('div', { class: 'thumbs' }, images.map((img, i) => {
-    const box = h('div', { class: 'ph' }, '🖼');
+    const box = thumbCache.has(img.image_id) ? h('img', { src: thumbCache.get(img.image_id), alt: '' }) : h('div', { class: 'ph' }, '🖼');
     thumbEls.set(img.image_id, box);
-    return h('button', { class: 'thumb', title: img.file_name, onclick: () => openLightbox(images, i, onChanged) },
+    return h('button', { class: 'thumb', title: img.file_name, onclick: () => openLightbox(list, offset + i, onChanged) },
       box, h('span', { class: 'lbl' }, LABELS[img.label] || ''));
   }));
 }
 async function loadThumbs(images, attempt = 0) {
-  const ids = images.map(i => i.image_id);
+  const ids = images.map(i => i.image_id).filter(id => !thumbCache.has(id));
   const missing = [];
   for (let i = 0; i < ids.length; i += 20) {
     const batch = ids.slice(i, i + 20);
@@ -214,7 +265,7 @@ async function loadThumbs(images, attempt = 0) {
     for (const id of batch) {
       const box = thumbEls.get(id);
       if (!box || !box.isConnected) continue;
-      if (res[id]) box.replaceWith(h('img', { src: res[id], alt: '' }));
+      if (res[id]) { thumbCache.set(id, res[id]); box.replaceWith(h('img', { src: res[id], alt: '' })); }
       else missing.push(images.find(x => x.image_id === id));
     }
   }
@@ -236,7 +287,7 @@ function openLightbox(images, index, onChanged) {
   const cache = new Map();
   async function show() {
     const cur = images[i];
-    name.textContent = `${i + 1}/${images.length} · ${cur.file_name} · ${fmtSize(cur.size_bytes)}`;
+    name.textContent = [`${i + 1}/${images.length}`, cur.visit_date ? 'Khám ' + fmtDate(cur.visit_date) : '', cur.file_name, fmtSize(cur.size_bytes)].filter(Boolean).join(' · ');
     label.replaceChildren(...labelOptions(cur.label));
     original.href = 'https://drive.google.com/file/d/' + encodeURIComponent(cur.image_id) + '/view';
     img.removeAttribute('src'); status.textContent = 'Đang tải ảnh…';

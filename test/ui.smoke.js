@@ -16,6 +16,7 @@ function loadServer(opts) {
   for (const f of ['Lib', 'Repo', 'Main', 'Patients', 'Visits', 'Images', 'Import', 'Backup'])
     vm.runInContext(fs.readFileSync(path.join(SRC, 'server', f + '.gs'), 'utf8'), ctx);
   ctx.setup();
+  ctx.__gas = gas;
   return ctx;
 }
 
@@ -87,9 +88,9 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   assert.equal(d.querySelectorAll('.upload-list .up').length, 2);
 
   btn(d, 'Lưu').click();
-  await until(() => d.body.textContent.includes('Nhật ký khám (1)'), 10000);
+  await until(() => d.body.textContent.includes('Lịch sử khám (1)'), 10000);
   await until(() => d.querySelectorAll('.thumbs img').length === 2);
-  assert.match(d.body.textContent, /Tổng còn nợ300\.000/);
+  assert.match(d.body.textContent, /Tổng còn nợ: 300\.000/);
   assert.ok(calls.filter(c => c === 'uploadChunk').length >= 4, 'big file sent in 2 MB chunks');
   const imgs = server.readActive_('Images');
   assert.equal(imgs.length, 2);
@@ -105,6 +106,32 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   await until(() => d.querySelectorAll('.thumbs img').length === 2);
   d.querySelector('.thumb').click();
   await until(() => d.querySelector('.lightbox img[src^="data:image"]'));
+  assert.match(d.querySelector('.lightbox .grow').textContent, /^1\/2 · Khám \d{2}\/\d{2}\/\d{4}/);
+  btn(d, '✕').click();
+
+  // second visit → "Hình ảnh" tab groups photos by visit, lightbox swipes across all visits
+  const pid = server.readActive_('Patients')[0].patient_id;
+  const v2 = server.saveVisit({ patient_id: pid, visit_date: '2025-01-10', reason: 'Khám cũ' });
+  const ctx = server.getUploadContext(v2);
+  const F = server.__gas.__File;
+  const f = new F('old.jpg', server.__gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 50);
+  server.registerImages(v2, [{ id: f.id, label: 'xquang' }]);
+  btn(d, 'Danh sách').click();
+  await until(() => btn(d, '+ Bệnh nhân'));
+  set(w, await until(() => d.querySelector('input.search')), 'nguyen');
+  (await until(() => [...d.querySelectorAll('.list .item')].find(a => a.textContent.includes('Nguyễn Văn An')))).click();
+  await until(() => d.body.textContent.includes('Lịch sử khám (2)'));
+  assert.equal(d.querySelectorAll('details.visit').length, 2);
+  assert.equal(d.querySelectorAll('details.visit[open]').length, 1);
+  btn(d, 'Hình ảnh (3)').click();
+  await until(() => d.querySelectorAll('.thumbs .thumb').length === 3);
+  assert.equal(d.querySelectorAll('section.card .thumbs').length, 2); // 2 visit groups
+  btn(d, 'X-quang (1)').click();
+  await until(() => d.querySelectorAll('.thumbs .thumb').length === 1);
+  btn(d, 'Tất cả').click();
+  await until(() => d.querySelectorAll('.thumbs .thumb').length === 3);
+  [...d.querySelectorAll('.thumbs .thumb')][2].click();
+  await until(() => /^3\/3 · Khám 10\/01\/2025/.test(d.querySelector('.lightbox .grow').textContent));
   w.close();
 });
 
