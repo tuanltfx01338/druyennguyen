@@ -176,7 +176,7 @@ test('dashboard is the landing page: stats, appointments, chart, missed appointm
   assert.match(d.body.textContent, /\+2 mới tháng này/);
   assert.match(d.body.textContent, /Lỡ hẹn 30 ngày qua \(1\).*Vũ Thu Hà.*Cạo vôi/);
   assert.ok(!/nợ|Đã thu|\d đ\b/.test(d.getElementById('app').textContent));
-  assert.match(d.body.textContent, /Hôm nay09:00 Đỗ Minh Khang.*45 phút · Chữa tuỷ lần 2/);
+  assert.match(d.querySelector('.today-card').textContent, /09:00 Đỗ Minh Khang.*45 phút · Chữa tuỷ lần 2/);
   assert.equal(d.querySelectorAll('.chart .col').length, 6);
   assert.equal(d.querySelector('.chart .col-val').textContent, '2');
   d.querySelectorAll('.chart .col')[5].click();
@@ -205,7 +205,8 @@ test('calendar: day/week/month views, overlap layout, tap slot → new appointme
   await until(() => d.querySelectorAll('.tg-day').length === 1 && d.querySelectorAll('.tg-col .ev').length === 2);
   assert.ok(d.querySelector('.cal-title').textContent.includes(today.split('-').reverse().join('/')));
   const evs = [...d.querySelectorAll('.tg-col .ev')];
-  assert.match(evs[0].style.top, /^433px$/);                 // 09:00 → 540 min × 0.8px + 1
+  assert.match(evs[0].style.top, /^145px$/);                 // 09:00 → (540 − 360 min) × 0.8px + 1 (grid starts 06:00)
+  assert.equal(d.querySelectorAll('.tg-hour').length, 15);   // 06:00–21:00
   assert.match(evs[0].style.width, /calc\(50% - 3px\)/);     // overlapping → side by side
   assert.equal(d.querySelectorAll('.tg-allday .ev').length, 1);
 
@@ -225,7 +226,7 @@ test('calendar: day/week/month views, overlap layout, tap slot → new appointme
 
   // tap an empty slot at 14:00 → form prefilled; pick patient, duration, save
   const col = d.querySelector('.tg-col');
-  Object.defineProperty(w.MouseEvent.prototype, 'offsetY', { configurable: true, get() { return 14 * 48 + 5; } });
+  Object.defineProperty(w.MouseEvent.prototype, 'offsetY', { configurable: true, get() { return (14 - 6) * 48 + 5; } });
   col.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   await until(() => d.body.textContent.includes('Lịch hẹn mới'));
   assert.equal(d.querySelector('input[type=time]').value, '14:00');
@@ -276,5 +277,50 @@ test('patient form: portrait avatar, CCCD (unique), several phones; avatar shows
   const q = await until(() => d.querySelector('input.search'));
   set(w, q, '000002');                                  // search by CCCD
   await until(() => d.querySelector('.list .item.row-av .avatar img'));
+  w.close();
+});
+
+test('record exam result from today\'s list: prefilled form, photos, appointment marked done; walk-in', async () => {
+  const server = loadServer();
+  const pad = n => String(n).padStart(2, '0');
+  const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+  const a = server.savePatient({ full_name: 'Đinh Gia Bảo', allergies: 'Aspirin' });
+  const b = server.savePatient({ full_name: 'Lâm Mỹ Duyên' });
+  const r = server.saveAppointment({ patient_id: a, appt_date: today, start_time: '08:30', duration_min: 60, title: 'Chữa tuỷ R36' });
+  const { w, d } = boot(server);
+  await until(() => d.querySelector('.today-card'));
+  assert.match(d.querySelector('.today-card h3').textContent, /đã ghi 0\/1/);
+  btn(d, '📝 Ghi kết quả').click();
+  await until(() => d.querySelector('h2') && d.querySelector('h2').textContent === 'Ghi kết quả khám');
+  assert.equal(d.querySelector('[name=reason]').value, 'Chữa tuỷ R36');
+  assert.ok(!/null|undefined/.test(d.getElementById('app').textContent));
+  assert.equal(d.querySelector('[name=visit_date]').value, today);
+  assert.match(d.querySelector('.info').textContent, /Theo lịch hẹn .* 08:30 · Chữa tuỷ R36/);
+  set(w, d.querySelector('[name=diagnosis]'), 'Viêm tuỷ R36');
+  const input = d.querySelector('.upload-list').parentNode.querySelector('input[type=file]');
+  Object.defineProperty(input, 'files', { value: [new w.File([new Uint8Array(3000)], 'R36.jpg', { type: 'image/jpeg' })], configurable: true });
+  input.dispatchEvent(new w.Event('change'));
+  btn(d, 'Lưu').click();
+  await until(() => d.querySelector('.tabs'), 8000);              // back on the patient record
+  const appt = server.getAppointment(r.appt_id).appointment;
+  assert.equal(appt.status, 'arrived');
+  assert.ok(appt.result_visit_id);
+  assert.equal(server.getVisit(appt.result_visit_id).visit.images.length, 1);
+
+  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Tổng quan').click();
+  await until(() => d.querySelector('.today-card') && /đã ghi 1\/1/.test(d.querySelector('.today-card h3').textContent));
+  assert.ok(btn(d, '📄 Kết quả'));
+
+  btn(d, '+ Khám không hẹn').click();                           // walk-in
+  const q = await until(() => d.querySelector('input[type=search]'));
+  set(w, q, 'duyen');
+  (await until(() => d.querySelector('.list .item'))).click();
+  await until(() => d.querySelector('h2') && d.querySelector('h2').textContent === 'Lần khám mới');
+  assert.ok(!/null|undefined/.test(d.getElementById('app').textContent)); // patient without allergy: no stray "null"
+  set(w, d.querySelector('[name=reason]'), 'Ê buốt');
+  btn(d, 'Lưu').click();
+  await until(() => d.querySelector('.tabs'));
+  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Tổng quan').click();
+  await until(() => d.querySelector('.today-card') && /Lâm Mỹ Duyên.*Khám không hẹn/.test(d.querySelector('.today-card').textContent));
   w.close();
 });

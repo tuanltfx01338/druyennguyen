@@ -10,6 +10,7 @@ const APPT_STATUS = {
 const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 const WD_LONG = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
 const HOUR_PX = 48;              // 30-minute row = 24px
+const DAY_START_H = 6, DAY_END_H = 21; // clinic view 06:00–21:00 (grid widens if a booking falls outside)
 const PX_PER_MIN = HOUR_PX / 60;
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 
@@ -27,7 +28,10 @@ const apptTimeText = a => a.start_time ? `${a.start_time}–${endTimeOf(a)} (${a
 
 const calState = { view: window.innerWidth < 600 ? 'day' : 'week', date: todayStr() };
 let pendingAppt = null; // prefill for the appointment form
+let pendingVisit = null; // { fromAppt } when recording an appointment's result
 
+/** Open the visit form to record the exam result of an appointment (prefilled; links back on save). */
+function recordResult(a) { pendingVisit = { fromAppt: a }; go('p/' + a.patient_id + '/v/new'); }
 function openCalendar(view, date) { if (view) calState.view = view; if (date) calState.date = date; go('calendar'); }
 function newAppointment(prefill) { pendingAppt = prefill || {}; go('a/new'); }
 
@@ -88,11 +92,11 @@ async function pageCalendar() {
   else {
     const days = view === 'day' ? [from] : Array.from({ length: 7 }, (_, i) => shiftDays(from, i));
     body.replaceChildren(...timeGrid(days, appts, today));
+    // 06:00–21:00 is 720px: start at the top unless the first booking is further down.
     const scroller = body.querySelector('.tg-scroll');
     const first = appts.filter(a => a.start_time).map(a => toMin(a.start_time)).sort((x, y) => x - y)[0];
-    const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-    const target = first != null ? first : (days.includes(today) ? nowMin : 8 * 60);
-    scroller.scrollTop = Math.max(0, (Math.min(target, 8 * 60) - 30) * PX_PER_MIN);
+    const startMin = Math.min(DAY_START_H * 60, first == null ? DAY_START_H * 60 : Math.floor(first / 60) * 60);
+    if (first != null) scroller.scrollTop = Math.max(0, (first - startMin - 30) * PX_PER_MIN);
   }
 }
 
@@ -106,27 +110,29 @@ function timeGrid(days, appts, today) {
   const allDay = h('div', { class: 'tg-allday' }, h('div', { class: 'tg-gutter' }, 'Cả ngày'),
     days.map(d => h('div', { class: 'tg-allday-col' }, appts.filter(a => a.appt_date === d && !a.start_time).map(a =>
       h('button', { class: apptClass(a) + ' chip-ev', onclick: () => apptSheet(a) }, multi ? shortName(a.full_name) : a.full_name + (a.title ? ' · ' + a.title : ''))))));
-  const hours = Array.from({ length: 24 }, (_, i) => h('div', { class: 'tg-hour', style: `height:${HOUR_PX}px` }, h('span', {}, i ? pad(i) + ':00' : '')));
+  const timed = appts.filter(a => a.start_time);
+  const startH = Math.min(DAY_START_H, ...timed.map(a => Math.floor(toMin(a.start_time) / 60)));
+  const endH = Math.min(24, Math.max(DAY_END_H, ...timed.map(a => Math.ceil((toMin(a.start_time) + (Number(a.duration_min) || 15)) / 60))));
+  const base = startH * 60;
+  const hours = Array.from({ length: endH - startH }, (_, i) => h('div', { class: 'tg-hour', style: `height:${HOUR_PX}px` }, h('span', {}, i ? pad(startH + i) + ':00' : '')));
   const cols = days.map(d => {
-    const col = h('div', { class: 'tg-col' + (d === today ? ' today' : ''), style: `height:${24 * HOUR_PX}px`,
+    const col = h('div', { class: 'tg-col' + (d === today ? ' today' : ''), style: `height:${(endH - startH) * HOUR_PX}px`,
       onclick: e => {
         if (e.target !== col) return;
-        const min = Math.floor(e.offsetY / PX_PER_MIN / 30) * 30;
+        const min = base + Math.floor(e.offsetY / PX_PER_MIN / 30) * 30;
         newAppointment({ appt_date: d, start_time: minToTime(min) });
       } });
     layoutDay(appts.filter(a => a.appt_date === d)).forEach(({ a, s, e, col: c, cols: n }) => {
       const height = Math.max((e - s) * PX_PER_MIN - 2, 18);
       col.append(h('button', { class: apptClass(a) + (multi && n >= 3 ? ' narrow' : ''), title: `${a.start_time} ${a.full_name}`,
-        style: `top:${s * PX_PER_MIN + 1}px;height:${height}px;left:calc(${(c / n) * 100}% + 1px);width:calc(${100 / n}% - 3px)`,
+        style: `top:${(s - base) * PX_PER_MIN + 1}px;height:${height}px;left:calc(${(c / n) * 100}% + 1px);width:calc(${100 / n}% - 3px)`,
         onclick: ev => { ev.stopPropagation(); apptSheet(a); } },
         h('div', { class: 'ev-t' }, a.start_time + (multi ? '' : '–' + endTimeOf(a))),
-        h('div', { class: 'ev-n' }, (a.status !== 'scheduled' ? APPT_STATUS[a.status].icon + ' ' : '') + (multi ? shortName(a.full_name) : a.full_name)),
+        h('div', { class: 'ev-n' }, (a.result_visit_id ? '📝 ' : a.status !== 'scheduled' ? APPT_STATUS[a.status].icon + ' ' : '') + (multi ? shortName(a.full_name) : a.full_name)),
         a.title && height > 40 ? h('div', { class: 'ev-d' }, a.title) : null));
     });
-    if (d === today) {
-      const now = new Date();
-      col.append(h('div', { class: 'now-line', style: `top:${(now.getHours() * 60 + now.getMinutes()) * PX_PER_MIN}px` }));
-    }
+    const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+    if (d === today && nowMin >= base && nowMin <= endH * 60) col.append(h('div', { class: 'now-line', style: `top:${(nowMin - base) * PX_PER_MIN}px` }));
     return col;
   });
   const grid = h('div', { class: 'tg-scroll' }, h('div', { class: 'tg-grid' }, h('div', { class: 'tg-gutter' }, hours), cols));
@@ -165,14 +171,16 @@ function apptSheet(a) {
       a.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + a.allergies) : null,
       kv([['Ngày', fmtDayLong(a.appt_date)], ['Giờ', apptTimeText(a)], ['Nội dung', a.title], ['Ghi chú', a.notes],
         ['SĐT', phonesOf(a).join('\n')], ['Trạng thái', st.icon + ' ' + st.label]]),
+      a.result_visit_id
+        ? h('button', { class: 'primary big-cta', onclick: () => { close(); go('v/' + a.result_visit_id); } }, '📄 Xem / bổ sung kết quả khám')
+        : a.status !== 'cancelled' ? h('button', { class: 'primary big-cta', onclick: () => { close(); recordResult(a); } }, '📝 Ghi kết quả khám & tải ảnh') : null,
       h('div', { class: 'row-actions' },
-        a.status !== 'arrived' ? h('button', { class: 'primary', onclick: () => setStatus('arrived') }, '✓ Đã đến') : null,
+        a.status !== 'arrived' ? h('button', { onclick: () => setStatus('arrived') }, '✓ Đã đến') : null,
         a.status !== 'no_show' ? h('button', { onclick: () => setStatus('no_show') }, '✗ Không đến') : null,
         a.status !== 'cancelled' ? h('button', { onclick: () => setStatus('cancelled') }, '⊘ Huỷ hẹn') : h('button', { onclick: () => setStatus('scheduled') }, 'Khôi phục')),
       h('div', { class: 'row-actions', style: 'margin:0' },
         h('button', { onclick: () => { close(); go('a/' + a.appt_id); } }, 'Sửa'),
-        h('button', { onclick: () => { close(); go('p/' + a.patient_id); } }, 'Hồ sơ'),
-        h('button', { onclick: () => { close(); go('p/' + a.patient_id + '/v/new'); } }, '+ Lần khám'))));
+        h('button', { onclick: () => { close(); go('p/' + a.patient_id); } }, 'Hồ sơ'))));
   document.body.append(wrap);
 }
 
@@ -227,7 +235,7 @@ async function pageAppointmentForm(id) {
   let patientId = patient ? patient.patient_id : '';
   const picker = patientPicker(patient, p => { patientId = p ? p.patient_id : ''; dirty = true; });
   const date = h('input', { type: 'date', value: a.appt_date, oninput: () => { dirty = true; } });
-  const time = h('input', { type: 'time', value: a.start_time || '', step: 300, oninput: () => { dirty = true; updEnd(); } });
+  const time = h('input', { type: 'time', value: a.start_time || '', step: 300, min: '06:00', max: '21:00', oninput: () => { dirty = true; updEnd(); } });
   const endInfo = h('span', { class: 'muted' });
   let duration = a.duration_min === '' || a.duration_min == null ? '' : String(a.duration_min);
   const dur = durationPicker(duration, v => { duration = v; dirty = true; updEnd(); });

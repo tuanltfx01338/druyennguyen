@@ -9,8 +9,9 @@ var TABLES = {
   Visits: ['visit_id', 'patient_id', 'visit_date', 'reason', 'diagnosis', 'teeth', 'treatment', 'plan',
     'prescription', 'notes', 'folder_id', 'source',
     'created_at', 'updated_at', 'deleted'],
+  // visit_id = lần khám đã đặt hẹn này · result_visit_id = lần khám ghi kết quả của buổi hẹn này
   Appointments: ['appt_id', 'patient_id', 'appt_date', 'start_time', 'duration_min', 'title', 'notes', 'status', 'visit_id',
-    'created_at', 'updated_at', 'deleted'],
+    'result_visit_id', 'created_at', 'updated_at', 'deleted'],
   Images: ['image_id', 'visit_id', 'patient_id', 'file_name', 'mime', 'size_bytes', 'label', 'created_at', 'deleted'],
   Counters: ['year', 'last_seq'],
   ImportLog: ['run_id', 'at', 'sheet', 'row', 'status', 'message']
@@ -319,10 +320,13 @@ function buildDashboard(patients, visits, today, appointments) {
     if (v.visit_date === today) todayVisits.push({ patient_id: v.patient_id, full_name: byId[v.patient_id].full_name,
       avatar_id: byId[v.patient_id].avatar_id, visit_id: v.visit_id, reason: v.reason, diagnosis: v.diagnosis });
   });
+  var resultIds = {};
+  (appointments || []).forEach(function (a) { if (a.result_visit_id) resultIds[a.result_visit_id] = true; });
   var pub = function (a) {
     var p = byId[a.patient_id];
     return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: p.full_name, phone: p.phone, avatar_id: p.avatar_id,
-      appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title, status: a.status };
+      allergies: p.allergies, appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title,
+      status: a.status, result_visit_id: a.result_visit_id || '' };
   };
   var mine = (appointments || []).filter(function (a) { return byId[a.patient_id]; });
   var to = addDays(today, 7), since = addDays(today, -30);
@@ -343,7 +347,10 @@ function buildDashboard(patients, visits, today, appointments) {
       apptToday: upcoming.filter(function (a) { return a.appt_date === today; }).length, appt7: upcoming.length,
       missed30: missed.length
     },
-    monthly: monthly, todayVisits: todayVisits, upcoming: upcoming, missed: missed.slice(0, 10)
+    monthly: monthly, todayVisits: todayVisits, upcoming: upcoming, missed: missed.slice(0, 10),
+    // Today's work list: appointments (with/without recorded result) + walk-in visits not tied to an appointment.
+    todayAppts: upcoming.filter(function (a) { return a.appt_date === today; }),
+    walkIns: todayVisits.filter(function (v) { return !resultIds[v.visit_id]; })
   };
 }
 

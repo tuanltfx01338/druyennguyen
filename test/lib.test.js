@@ -160,7 +160,7 @@ test('buildDashboard (no money): counts, appointments, missed', () => {
   ];
   const A = [
     { appt_id: 'x1', patient_id: 'A', appt_date: '2026-11-21', start_time: '14:00', duration_min: 30, title: 'Lắp sứ', status: 'scheduled' },
-    { appt_id: 'x2', patient_id: 'A', appt_date: '2026-11-21', start_time: '08:00', duration_min: 30, status: 'arrived' },
+    { appt_id: 'x2', patient_id: 'A', appt_date: '2026-11-21', start_time: '08:00', duration_min: 30, status: 'arrived', result_visit_id: 1 },
     { appt_id: 'x3', patient_id: 'B', appt_date: '2026-11-28', start_time: '', status: 'scheduled' },
     { appt_id: 'x4', patient_id: 'B', appt_date: '2026-11-22', start_time: '09:00', duration_min: 30, status: 'cancelled' },
     { appt_id: 'x5', patient_id: 'B', appt_date: '2026-11-29', start_time: '09:00', duration_min: 30, status: 'scheduled' }, // > 7 days
@@ -177,5 +177,9 @@ test('buildDashboard (no money): counts, appointments, missed', () => {
   assert.equal(d.upcoming[1].avatar_id, 'img1');
   assert.deepEqual(d.missed.map(u => u.appt_id), ['m2', 'm1']); // most recent first
   assert.deepEqual(d.todayVisits.map(x => x.visit_id), [1]);
+  assert.deepEqual(d.todayAppts.map(x => [x.appt_id, x.result_visit_id]), [['x2', 1], ['x1', '']]);
+  assert.deepEqual(d.walkIns, []); // visit 1 is the result of appointment x2, not a walk-in
+  const d2 = JSON.parse(JSON.stringify(L.buildDashboard(P, V, '2026-11-21', A.filter(a => a.appt_id !== 'x2'))));
+  assert.deepEqual(d2.walkIns.map(x => x.visit_id), [1]);
   assert.ok(!JSON.stringify(d).match(/paid|debt|cost/));
 });

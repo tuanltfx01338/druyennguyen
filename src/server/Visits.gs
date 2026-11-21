@@ -12,6 +12,7 @@ function getVisit(id) {
 /**
  * data.appointment (optional): {appt_date, start_time, duration_min, title} — the follow-up appointment
  * booked during this visit; creates it or updates the one already linked to the visit.
+ * data.from_appt_id (optional, new visits only): the appointment whose exam result this visit records.
  */
 function saveVisit(data) {
   return api_('saveVisit', function () {
@@ -22,7 +23,11 @@ function saveVisit(data) {
     delete v.next_appointment; // replaced by the Appointments table
     var ap = data.appointment && data.appointment.appt_date ? data.appointment : null;
     return withLock_(function () {
-      var visit;
+      var visit, src = null;
+      if (data.from_appt_id && !data.visit_id) {
+        src = mustFindActive_('Appointments', 'appt_id', data.from_appt_id, 'Lịch hẹn');
+        if (src.patient_id !== data.patient_id) throw new Error('Lịch hẹn không thuộc bệnh nhân này');
+      }
       if (data.visit_id) {
         visit = mustFindActive_('Visits', 'visit_id', data.visit_id, 'Lần khám');
         Object.keys(v).forEach(function (k) { visit[k] = v[k]; });
@@ -38,6 +43,13 @@ function saveVisit(data) {
         v.created_at = v.updated_at = now_();
         v.deleted = false;
         appendRows_('Visits', [v]);
+      }
+      // Recording the result of an appointment: link it and mark the patient as arrived (validated before any write).
+      if (src) {
+        src.result_visit_id = visit.visit_id;
+        if (src.status !== 'cancelled') src.status = 'arrived';
+        src.updated_at = now_();
+        updateRow_('Appointments', src);
       }
       if (ap) {
         var linked = linkedAppointment_(visit.visit_id);

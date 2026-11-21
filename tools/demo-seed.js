@@ -172,6 +172,13 @@
     }
   }
 
+  // Today: results already recorded for the two earliest appointments (the rest still to do).
+  S.listAppointments(day(0), day(0)).filter(a => a.start_time && a.status === 'scheduled').slice(0, 2).forEach((a, i) => {
+    const vid = S.saveVisit({ patient_id: a.patient_id, visit_date: day(0), reason: a.title, from_appt_id: a.appt_id,
+      diagnosis: ['Viêm nướu nhẹ', 'Sâu ngà R26'][i], treatment: ['Cạo vôi, đánh bóng', 'Trám composite R26'][i] });
+    addImages(vid, [[`ket-qua-${i + 1}.jpg`, 'sau']]);
+  });
+
   // Old photo folders waiting in _import (1 matches after importing the sample Excel, 1 does not)
   const imp = gas.DriveApp.getFolderById(gas.PropertiesService.getScriptProperties().getProperty('IMPORT_FOLDER_ID'));
   const fk = imp.createFolder('0006_Dang Van Khoa');

@@ -124,6 +124,16 @@ test('appointments: create, list by range, conflicts warn, status, delete, patie
   assert.equal(s.getAppointment(r1.appt_id).appointment.status, 'arrived');
   assert.throws(() => s.setAppointmentStatus(r1.appt_id, 'x'), /Trạng thái/);
   assert.equal(s.getPatient(b).appointments.length, 2);
+  // record the exam result of appointment r1 → linked + arrived
+  s.setAppointmentStatus(r1.appt_id, 'scheduled');
+  const res = s.saveVisit({ patient_id: a, visit_date: today, reason: 'Nhổ R38', from_appt_id: r1.appt_id });
+  const linked = s.getAppointment(r1.appt_id).appointment;
+  assert.equal(linked.result_visit_id, res);
+  assert.equal(linked.status, 'arrived');
+  assert.throws(() => s.saveVisit({ patient_id: b, visit_date: today, from_appt_id: r1.appt_id }), /không thuộc/);
+  const dash = s.getDashboard();
+  assert.equal(dash.todayAppts.find(x => x.appt_id === r1.appt_id).result_visit_id, res);
+  assert.equal(dash.walkIns.length, 0);
   s.deleteAppointment(r2.appt_id);
   assert.equal(s.listAppointments(today, today).length, 2);
   assert.equal(s.getDashboard().stats.apptToday, 2);

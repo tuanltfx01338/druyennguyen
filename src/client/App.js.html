@@ -18,7 +18,7 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 const $app = document.getElementById('app');
-const mount = (...nodes) => $app.replaceChildren(...nodes);
+const mount = (...nodes) => $app.replaceChildren(...nodes.flat().filter(n => n != null && n !== false)); // skip optional (null) sections
 const loading = () => mount(h('div', { class: 'loading' }, 'Đang tải…'));
 
 const LABELS = { truoc: 'Trước', sau: 'Sau', xquang: 'X-quang', khac: 'Khác' };
@@ -93,6 +93,7 @@ let uploadBusy = false;
 const routes = [
   [/^$/, () => pageDashboard()],
   [/^patients$/, () => pagePatients()],
+  [/^walkin$/, () => pageWalkIn()],
   [/^p\/new$/, () => pagePatientForm()],
   [/^p\/([^/]+)\/edit$/, m => pagePatientForm(m[1])],
   [/^p\/([^/]+)\/v\/new$/, m => pageVisitForm({ patientId: m[1] })],
@@ -230,6 +231,42 @@ function niceStep(x) {
   return [1, 2, 5, 10].map(k => k * p).find(v => v >= x);
 }
 
+/** Today's work list: each appointment has a one-tap "record result" action; walk-ins listed below. */
+function todayCard(d) {
+  const done = d.todayAppts.filter(a => a.result_visit_id).length;
+  const rows = d.todayAppts.map(a => {
+    const action = a.result_visit_id
+      ? h('button', { class: 'small', onclick: e => { e.stopPropagation(); go('v/' + a.result_visit_id); } }, '📄 Kết quả')
+      : a.status === 'cancelled' ? h('span', { class: 'muted' }, 'Đã huỷ')
+      : h('button', { class: 'primary small', onclick: e => { e.stopPropagation(); recordResult(a); } }, '📝 Ghi kết quả');
+    return h('div', { class: 'item row-av today-row' + (a.status === 'cancelled' ? ' cancelled' : ''), onclick: () => apptSheet(a) },
+      avatar(a, 40),
+      h('div', { class: 'row-main' },
+        h('div', {}, h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name),
+          a.allergies ? h('span', { class: 'badge red' }, 'Dị ứng') : null,
+          a.result_visit_id ? h('span', { class: 'badge' }, '✓ Đã ghi') : a.status === 'no_show' ? h('span', { class: 'badge red' }, '✗ Không đến') : null),
+        h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title].filter(Boolean).join(' · '))),
+      action);
+  });
+  const walk = d.walkIns.map(v => avRow(v, () => go('v/' + v.visit_id),
+    h('div', {}, h('b', {}, v.full_name), h('span', { class: 'badge' }, 'Khám không hẹn')),
+    h('div', { class: 'muted' }, [v.reason, v.diagnosis].filter(Boolean).join(' · '))));
+  return h('section', { class: 'card today-card' },
+    h('div', { class: 'visit-head' },
+      h('h3', { style: 'margin:0' }, `Lịch khám hôm nay · đã ghi ${done}/${d.todayAppts.filter(a => a.status !== 'cancelled').length}`),
+      h('button', { onclick: () => go('walkin') }, '+ Khám không hẹn')),
+    h('div', { class: 'list' }, rows.length || walk.length ? [...rows, ...walk] : [h('div', { class: 'muted', style: 'padding:6px' }, 'Hôm nay chưa có lịch hẹn — bấm "+ Khám không hẹn" để ghi lần khám')]));
+}
+
+/** Walk-in: pick (or create) the patient, then open a new visit. */
+function pageWalkIn() {
+  mount(h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Tổng quan')),
+    h('section', { class: 'card' }, h('h2', {}, 'Ghi lần khám (không có lịch hẹn)'),
+      h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Chọn bệnh nhân để ghi kết quả khám và tải ảnh.'),
+      patientPicker(null, p => { if (p) go('p/' + p.patient_id + '/v/new'); }),
+      h('div', { class: 'row-actions', style: 'margin-top:10px' }, h('button', { onclick: () => go('p/new') }, '+ Bệnh nhân mới'))));
+}
+
 async function pageDashboard() {
   const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Tìm bệnh nhân: tên, mã, SĐT, CCCD…', autocomplete: 'off',
     onkeydown: e => { if (e.key === 'Enter') { pendingQuery = search.value; go('patients'); } } });
@@ -249,6 +286,7 @@ async function pageDashboard() {
   const s = d.stats;
   const [y, m, dd] = d.today.split('-');
   const listOrEmpty = (items, empty) => items.length ? items : [h('div', { class: 'muted', style: 'padding:6px' }, empty)];
+  const nextDays = d.upcoming.filter(a => a.appt_date > d.today); // today is in the work list above
 
 
   shell.replaceChildren(
@@ -258,19 +296,17 @@ async function pageDashboard() {
       statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} hẹn trong 7 ngày`, () => openCalendar('day', d.today)),
       statTile('Khám tháng này', s.visitsMonth, 'lần khám'),
       statTile('Tổng bệnh nhân', s.patients, s.newPatientsMonth ? `+${s.newPatientsMonth} mới tháng này` : 'hồ sơ', () => go('patients'))),
+    todayCard(d),
     h('div', { class: 'dash-grid' },
       h('section', { class: 'card', id: 'dash-appt' },
-        h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, `Lịch hẹn 7 ngày tới (${d.upcoming.length})`),
+        h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, `Sắp tới — 7 ngày (${nextDays.length})`),
           h('button', { onclick: () => openCalendar('week', d.today) }, 'Mở lịch')),
-        h('div', { class: 'list' }, listOrEmpty(d.upcoming.map(a => avRow(a, () => openCalendar('day', a.appt_date),
-          h('div', {}, h('span', { class: 'badge' + (a.appt_date === d.today ? ' red' : ''), style: 'margin:0 6px 0 0' }, dayLabel(a.appt_date, d.today)),
-            h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name),
-            a.status === 'arrived' ? h('span', { class: 'badge' }, '✓ Đã đến') : null),
-          h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title, phonesOf(a)[0]].filter(Boolean).join(' · ')))), 'Không có lịch hẹn'))),
-      h('section', { class: 'card' }, h('h3', {}, `Khám hôm nay (${d.todayVisits.length})`),
-        h('div', { class: 'list' }, listOrEmpty(d.todayVisits.map(v => avRow(v, () => go('p/' + v.patient_id),
-          h('div', {}, h('b', {}, v.full_name), v.reason ? ' · ' + v.reason : ''), v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null)),
-          'Chưa có lần khám nào hôm nay'))),
+        h('div', { class: 'list' }, listOrEmpty(nextDays.slice(0, 8).map(a => avRow(a, () => openCalendar('day', a.appt_date),
+          h('div', {}, h('span', { class: 'badge', style: 'margin:0 6px 0 0' }, dayLabel(a.appt_date, d.today)),
+            h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name)),
+          h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title, phonesOf(a)[0]].filter(Boolean).join(' · ')))), 'Không có lịch hẹn')),
+        nextDays.length > 8 ? h('button', { class: 'link-btn', onclick: () => openCalendar('week', d.today) }, `Xem cả ${nextDays.length} lịch hẹn trên lịch →`) : null),
+
       h('section', { class: 'card' }, h('h3', {}, 'Lần khám 6 tháng gần nhất'), monthChart(d.monthly, 'visits', String)),
       h('section', { class: 'card' }, h('h3', {}, `Lỡ hẹn 30 ngày qua (${s.missed30})`),
         h('div', { class: 'muted', style: 'margin-top:-4px' }, 'Bệnh nhân không đến — nên gọi hẹn lại'),
@@ -572,6 +608,10 @@ async function pageVisitForm({ patientId, visitId }) {
     else patient = (await api('getPatient', patientId)).patient;
   } catch (e) { return mount(errBox(e, () => pageVisitForm({ patientId, visitId }))); }
   patientId = patient.patient_id;
+  // Recording the result of an appointment (from calendar / dashboard): prefill and link on save.
+  const fromAppt = !visitId && pendingVisit && pendingVisit.fromAppt && pendingVisit.fromAppt.patient_id === patientId ? pendingVisit.fromAppt : null;
+  pendingVisit = null;
+  if (fromAppt) visit = { visit_date: fromAppt.appt_date > todayStr() ? todayStr() : fromAppt.appt_date, reason: fromAppt.title || '' };
 
   const f = formFields([
     { name: 'visit_date', label: 'Ngày khám', type: 'date', required: true },
@@ -608,7 +648,7 @@ async function pageVisitForm({ patientId, visitId }) {
     },
   });
 
-  const title = h('h2', {}, visitId ? 'Sửa lần khám' : 'Lần khám mới');
+  const title = h('h2', {}, visitId ? 'Sửa lần khám' : fromAppt ? 'Ghi kết quả khám' : 'Lần khám mới');
   const save = h('button', { class: 'primary', onclick: doSave }, 'Lưu');
   async function doSave() {
     const d = f.data();
@@ -618,7 +658,8 @@ async function pageVisitForm({ patientId, visitId }) {
       if (apDate.value && apTime.value && !apDur) { save.disabled = false; return toast('Nhập thời lượng dự kiến cho lịch hẹn', 'warn'); }
       const appointment = apDate.value ? { appt_date: apDate.value, start_time: apTime.value, duration_min: apDur,
         title: apTitle.value || d.plan || 'Tái khám' } : null;
-      const id = await api('saveVisit', { ...d, visit_id: visitId, patient_id: patientId, appointment });
+      const id = await api('saveVisit', { ...d, visit_id: visitId, patient_id: patientId, appointment,
+        from_appt_id: fromAppt && !visitId ? fromAppt.appt_id : '' });
       dirty = false;
       if (!visitId) { // stay on this page as "edit" so queued photos keep their progress
         visitId = id;
@@ -640,6 +681,7 @@ async function pageVisitForm({ patientId, visitId }) {
     patient.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + patient.allergies) : null,
     h('section', { class: 'card' }, title,
       h('div', { class: 'row-av', style: 'margin-bottom:8px' }, avatar(patient, 40), h('div', { class: 'row-main' }, h('b', {}, patient.full_name), h('div', { class: 'muted' }, patient.patient_id))),
+      fromAppt ? h('div', { class: 'info' }, `📅 Theo lịch hẹn ${fmtDate(fromAppt.appt_date)} ${fromAppt.start_time || ''}${fromAppt.title ? ' · ' + fromAppt.title : ''} — lưu xong lịch hẹn tự chuyển "Đã đến".`) : null,
       f.el),
     h('section', { class: 'card' }, h('h3', {}, 'Ảnh chụp'), existing, uploader.el),
     apSection,
