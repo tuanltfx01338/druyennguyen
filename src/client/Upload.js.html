@@ -105,8 +105,8 @@ function createUploader({ getVisitId, onUploaded }) {
     item.render = () => {
       row.className = 'up ' + item.status;
       sel.disabled = rm.disabled = item.status === 'uploading' || item.status === 'done';
-      if (item.status === 'done') st.textContent = '✓ Đã tải';
-      if (item.status === 'error') st.textContent = '✗ ' + item.error;
+      if (item.status === 'done') st.textContent = 'Đã tải lên';
+      if (item.status === 'error') st.textContent = 'Lỗi: ' + item.error;
       if (item.status === 'queued') st.textContent = 'Chờ tải';
     };
     item.render();
@@ -165,7 +165,7 @@ function createUploader({ getVisitId, onUploaded }) {
   return {
     el: h('div', {},
       h('div', { class: 'row-actions' },
-        h('button', { type: 'button', class: 'primary', onclick: () => input.click() }, '📷 Chụp / chọn ảnh'),
+        h('button', { type: 'button', class: 'camera-btn', onclick: () => input.click() }, icon('camera', 22), 'Chụp / chọn ảnh'),
         h('span', { class: 'muted', style: 'align-self:center' }, 'Nhãn:'), batchLabel, retryBtn),
       input, note, list),
     pendingCount: () => items.filter(i => i.status !== 'done').length,

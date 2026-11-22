@@ -5,7 +5,8 @@ function getVisit(id) {
     v.images = readActive_('Images').filter(function (i) { return i.visit_id === id; }).map(publicImage_);
     v.appointment = linkedAppointment_(id);
     delete v._row;
-    return { visit: v, patient: { patient_id: p.patient_id, full_name: p.full_name, allergies: p.allergies, avatar_id: p.avatar_id } };
+    return { visit: v, patient: { patient_id: p.patient_id, full_name: p.full_name, allergies: p.allergies, avatar_id: p.avatar_id,
+      systemic_diseases: p.systemic_diseases, dob: p.dob, birth_year: p.birth_year, gender: p.gender } };
   });
 }
 

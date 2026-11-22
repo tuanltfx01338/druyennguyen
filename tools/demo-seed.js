@@ -163,7 +163,7 @@
   for (let off = -14; off <= 35; off++) {
     const dt = day(off);
     const dow = new Date(Date.now() + off * 864e5).getDay();
-    const n = dow === 0 ? (chance(0.3) ? 1 : 0) : 2 + Math.floor(rnd() * 5);
+    const n = off === 0 ? 6 : dow === 0 ? (chance(0.3) ? 1 : 0) : 2 + Math.floor(rnd() * 5); // today always busy for the demo
     for (let k = 0; k < n; k++) {
       const timed = chance(0.92);
       const status = off < 0 ? (chance(0.8) ? 'arrived' : chance(0.5) ? 'no_show' : 'cancelled') : (chance(0.05) ? 'cancelled' : 'scheduled');

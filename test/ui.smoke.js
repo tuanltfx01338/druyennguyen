@@ -58,23 +58,23 @@ const until = async (fn, ms = 4000) => {
   const t = Date.now();
   for (;;) { const v = fn(); if (v) return v; if (Date.now() - t > ms) throw new Error('timeout: ' + fn); await new Promise(r => setTimeout(r, 10)); }
 };
+const nav = (d, path) => d.querySelector(`.nav a[data-path="${path}"]:not(.brand)`).click();
+const menu = async (d, label) => { d.getElementById('nav-add').click(); (await until(() => [...d.querySelectorAll('.menu-item')].find(x => x.textContent.includes(label)))).click(); };
 const btn = (d, text) => [...d.querySelectorAll('button')].find(b => b.textContent.includes(text));
 const set = (w, el, v) => { el.value = v; el.dispatchEvent(new w.Event('input')); };
 
 test('create patient → visit with 2 original photos (server-chunk fallback) → see thumbs, allergy, no money; search', async () => {
   const server = loadServer();
   const { w, d, calls } = boot(server);
-  await until(() => btn(d, '+ Bệnh nhân'));
-  await until(() => d.body.textContent.includes('Tổng bệnh nhân'));
-
-  btn(d, '+ Bệnh nhân').click();
+  await until(() => d.querySelector('.stat'));
+  await menu(d, 'Bệnh nhân mới');
   await until(() => d.querySelector('[name=full_name]'));
   set(w, d.querySelector('[name=full_name]'), 'Nguyễn Văn An');
   set(w, d.querySelector('[name=allergies]'), 'Penicillin');
   btn(d, 'Lưu').click();
-  await until(() => d.querySelector('.alert') && d.querySelector('.alert').textContent.includes('Penicillin'));
+  await until(() => d.querySelector('.med-allergy') && d.querySelector('.med-allergy').textContent.includes('Penicillin'));
 
-  btn(d, '+ Lần khám').click();
+  btn(d, 'Ghi lần khám').click();
   await until(() => d.querySelector('[name=visit_date]'));
   assert.equal(d.querySelector('[name=cost]'), null); // no money fields
   set(w, d.querySelector('[name=diagnosis]'), 'Viêm tuỷ R46');
@@ -96,7 +96,7 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   assert.equal(imgs.length, 2);
   assert.equal(Math.max(...imgs.map(i => i.size_bytes)), 5 * 1024 * 1024 + 123); // original size kept
 
-  btn(d, 'Danh sách').click();
+  d.querySelector('.ph-back').click();
   const q = await until(() => d.querySelector('input.search'));
   set(w, q, 'nguyen van an');
   await until(() => [...d.querySelectorAll('.list .item b')].some(b => b.textContent === 'Nguyễn Văn An'));
@@ -116,8 +116,8 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   const F = server.__gas.__File;
   const f = new F('old.jpg', server.__gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 50);
   server.registerImages(v2, [{ id: f.id, label: 'xquang' }]);
-  btn(d, 'Danh sách').click();
-  await until(() => btn(d, '+ Bệnh nhân'));
+  d.querySelector('.ph-back').click();
+  await until(() => btn(d, 'Bệnh nhân mới'));
   set(w, await until(() => d.querySelector('input.search')), 'nguyen');
   (await until(() => [...d.querySelectorAll('.list .item')].find(a => a.textContent.includes('Nguyễn Văn An')))).click();
   await until(() => d.body.textContent.includes('Lịch sử khám (2)'));
@@ -125,7 +125,7 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   assert.equal(d.querySelectorAll('details.visit[open]').length, 1);
   btn(d, 'Hình ảnh (3)').click();
   await until(() => d.querySelectorAll('.thumbs .thumb').length === 3);
-  assert.equal(d.querySelectorAll('section.card .thumbs').length, 2); // 2 visit groups
+  assert.equal(d.querySelectorAll('section.panel .thumbs').length, 2); // 2 visit groups
   btn(d, 'X-quang (1)').click();
   await until(() => d.querySelectorAll('.thumbs .thumb').length === 1);
   btn(d, 'Tất cả').click();
@@ -142,8 +142,8 @@ test('import wizard: preview shows counts, blocks on errors, commits', async () 
   ];
   const server = loadServer({ importFixture: () => JSON.parse(JSON.stringify(fixture), (k, v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v) : v)) });
   const { w, d } = boot(server);
-  await until(() => btn(d, 'Nhập dữ liệu cũ'));
-  btn(d, 'Nhập dữ liệu cũ').click();
+  await until(() => d.querySelector('.stat'));
+  await menu(d, 'Nhập dữ liệu cũ');
   const fi = await until(() => d.querySelector('input[type=file][accept=".xlsx"]'));
   Object.defineProperty(fi, 'files', { value: [new w.File([new Uint8Array(10)], 'mau.xlsx')], configurable: true });
   btn(d, 'Xem trước').click();
@@ -176,7 +176,8 @@ test('dashboard is the landing page: stats, appointments, chart, missed appointm
   assert.match(d.body.textContent, /\+2 mới tháng này/);
   assert.match(d.body.textContent, /Lỡ hẹn 30 ngày qua \(1\).*Vũ Thu Hà.*Cạo vôi/);
   assert.ok(!/nợ|Đã thu|\d đ\b/.test(d.getElementById('app').textContent));
-  assert.match(d.querySelector('.today-card').textContent, /09:00 Đỗ Minh Khang.*45 phút · Chữa tuỷ lần 2/);
+  assert.match(d.querySelector('.today-card').textContent, /09:00.*Đỗ Minh Khang.*Chữa tuỷ lần 2/);
+  assert.match(d.querySelector('.hero').textContent, /Bệnh nhân tiếp theo.*09:00.*Đỗ Minh Khang.*Chữa tuỷ lần 2/); // next-patient hero
   assert.equal(d.querySelectorAll('.chart .col').length, 6);
   assert.equal(d.querySelector('.chart .col-val').textContent, '2');
   d.querySelectorAll('.chart .col')[5].click();
@@ -199,7 +200,7 @@ test('calendar: day/week/month views, overlap layout, tap slot → new appointme
   server.saveAppointment({ patient_id: b, appt_date: today, title: 'Gọi xác nhận' }); // no time → all-day row
   const { w, d } = boot(server);
   await until(() => d.querySelector('.stat'));
-  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Lịch hẹn').click();
+  nav(d, 'calendar');
   await until(() => btn(d, 'Ngày'));
   btn(d, 'Ngày').click(); // jsdom window is desktop-wide → default view is week
   await until(() => d.querySelectorAll('.tg-day').length === 1 && d.querySelectorAll('.tg-col .ev').length === 2);
@@ -249,8 +250,8 @@ test('patient form: portrait avatar, CCCD (unique), several phones; avatar shows
   const server = loadServer();
   server.savePatient({ full_name: 'Người có sẵn', national_id: '079090000001' });
   const { w, d } = boot(server);
-  await until(() => btn(d, '+ Bệnh nhân'));
-  btn(d, '+ Bệnh nhân').click();
+  await until(() => d.querySelector('.stat'));
+  await menu(d, 'Bệnh nhân mới');
   await until(() => d.querySelector('[name=national_id]'));
   set(w, d.querySelector('[name=full_name]'), 'Trịnh Bảo Ngọc');
   set(w, d.querySelector('[name=national_id]'), '079090000001');   // duplicate
@@ -268,15 +269,15 @@ test('patient form: portrait avatar, CCCD (unique), several phones; avatar shows
   btn(d, 'Lưu').click();
   await until(() => d.querySelector('.p-head .avatar img'));
   assert.match(d.querySelector('.p-head').textContent, /CCCD 079090000002/);
-  assert.match(d.querySelector('.p-head').textContent, /0903000111 · 0283 822 3344/);
+  assert.match(d.querySelector('.p-head').textContent, /0903000111.*0283 822 3344/);
   const p = server.searchPatients('ngoc')[0];
   assert.ok(p.avatar_id);
   assert.equal(server.__gas.DriveApp.getFileById(p.avatar_id).getName().startsWith('avatar_'), true);
 
-  btn(d, '+ Lịch hẹn').click();                       // picker preselected with avatar
+  btn(d, 'Đặt hẹn').click();                          // picker preselected with avatar
   await until(() => d.querySelector('.picked .avatar img'));
-  btn(d, 'Lịch hẹn').click();
-  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Bệnh nhân').click();
+  d.querySelector('.ph-back').click();
+  nav(d, 'patients');
   const q = await until(() => d.querySelector('input.search'));
   set(w, q, '000002');                                  // search by CCCD
   await until(() => d.querySelector('.list .item.row-av .avatar img'));
@@ -293,12 +294,12 @@ test('record exam result from today\'s list: prefilled form, photos, appointment
   const { w, d } = boot(server);
   await until(() => d.querySelector('.today-card'));
   assert.match(d.querySelector('.today-card h3').textContent, /đã ghi 0\/1/);
-  btn(d, '📝 Ghi kết quả').click();
-  await until(() => d.querySelector('h2') && d.querySelector('h2').textContent === 'Ghi kết quả khám');
+  btn(d, 'Ghi kết quả').click();
+  await until(() => d.querySelector('h1') && d.querySelector('h1').textContent === 'Ghi kết quả khám');
   assert.equal(d.querySelector('[name=reason]').value, 'Chữa tuỷ R36');
   assert.ok(!/null|undefined/.test(d.getElementById('app').textContent));
   assert.equal(d.querySelector('[name=visit_date]').value, today);
-  assert.match(d.querySelector('.info').textContent, /Theo lịch hẹn .* 08:30 · Chữa tuỷ R36/);
+  assert.match(d.querySelector('.info').textContent, /Theo lịch hẹn .* 08:30, Chữa tuỷ R36/);
   set(w, d.querySelector('[name=diagnosis]'), 'Viêm tuỷ R36');
   const input = d.querySelector('.upload-list').parentNode.querySelector('input[type=file]');
   Object.defineProperty(input, 'files', { value: [new w.File([new Uint8Array(3000)], 'R36.jpg', { type: 'image/jpeg' })], configurable: true });
@@ -310,21 +311,21 @@ test('record exam result from today\'s list: prefilled form, photos, appointment
   assert.ok(appt.result_visit_id);
   assert.equal(server.getVisit(appt.result_visit_id).visit.images.length, 1);
 
-  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Tổng quan').click();
+  nav(d, '');
   await until(() => d.querySelector('.today-card') && /đã ghi 1\/1/.test(d.querySelector('.today-card h3').textContent));
-  assert.ok(btn(d, '📄 Kết quả'));
+  assert.ok(btn(d, 'Kết quả'));
 
-  btn(d, '+ Khám không hẹn').click();                           // walk-in
+  btn(d, 'Khám không hẹn').click();                           // walk-in
   const q = await until(() => d.querySelector('input[type=search]'));
   set(w, q, 'duyen');
   (await until(() => d.querySelector('.list .item'))).click();
-  await until(() => d.querySelector('h2') && d.querySelector('h2').textContent === 'Lần khám mới');
+  await until(() => d.querySelector('h1') && d.querySelector('h1').textContent === 'Lần khám mới');
   assert.ok(!/null|undefined/.test(d.getElementById('app').textContent)); // patient without allergy: no stray "null"
   set(w, d.querySelector('[name=reason]'), 'Ê buốt');
   btn(d, 'Lưu').click();
   await until(() => d.querySelector('.tabs'));
-  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Tổng quan').click();
-  await until(() => d.querySelector('.today-card') && /Lâm Mỹ Duyên.*Khám không hẹn/.test(d.querySelector('.today-card').textContent));
+  nav(d, '');
+  await until(() => d.querySelector('.today-card') && /Không hẹn.*Lâm Mỹ Duyên.*Ê buốt/.test(d.querySelector('.today-card').textContent));
   w.close();
 });
 
@@ -338,7 +339,7 @@ test('calendar editing: drag to move, drag edge to resize, quick reschedule in s
   const rb = server.saveAppointment({ patient_id: b, appt_date: today, start_time: '09:30', duration_min: 30 });
   const { w, d } = boot(server);
   await until(() => d.querySelector('.stat'));
-  [...d.querySelectorAll('.topbar nav a')].find(x => x.textContent === 'Lịch hẹn').click();
+  nav(d, 'calendar');
   await until(() => btn(d, 'Ngày'));
   btn(d, 'Ngày').click();
   await until(() => d.querySelectorAll('.tg-col .ev.conflict').length === 2);
@@ -371,7 +372,7 @@ test('calendar editing: drag to move, drag edge to resize, quick reschedule in s
   await until(() => evOf('Vũ Thu Hà'));
   evOf('Vũ Thu Hà').click();
   await until(() => d.querySelector('.sheet'));
-  btn(d, '🕒 Đổi giờ').click();
+  btn(d, 'Đổi giờ').click();
   const qt = d.querySelector('.quick-edit input[type=time]');
   qt.value = '14:00';
   btn(d, '45\'').click();

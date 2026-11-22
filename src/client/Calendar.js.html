@@ -2,10 +2,10 @@
 'use strict';
 /* Lịch hẹn kiểu Outlook: Ngày / Tuần (lưới giờ) · Tháng (ô ngày). */
 const APPT_STATUS = {
-  scheduled: { label: 'Đã hẹn', icon: '🕒' },
-  arrived: { label: 'Đã đến', icon: '✓' },
-  no_show: { label: 'Không đến', icon: '✗' },
-  cancelled: { label: 'Đã huỷ', icon: '⊘' },
+  scheduled: { label: 'Đã hẹn', icon: 'clock' },
+  arrived: { label: 'Đã đến', icon: 'check' },
+  no_show: { label: 'Không đến', icon: 'x' },
+  cancelled: { label: 'Đã huỷ', icon: 'ban' },
 };
 const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 const WD_LONG = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
@@ -116,7 +116,7 @@ async function pageCalendar() {
   summary.replaceChildren(...[
     h('span', {}, h('b', {}, active.length), ' lịch hẹn'),
     h('span', {}, h('b', {}, appts.filter(a => a.result_visit_id).length), ' đã ghi kết quả'),
-    conflicts.size ? h('span', { class: 'sum-warn' }, '⚠ ', h('b', {}, conflicts.size), ' hẹn bị trùng giờ') : h('span', { class: 'sum-ok' }, '✓ Không trùng giờ'),
+    conflicts.size ? h('span', { class: 'sum-warn' }, icon('alert', 15), h('b', {}, conflicts.size), ' hẹn bị trùng giờ') : h('span', { class: 'sum-ok' }, icon('check', 15), 'Không trùng giờ'),
     view !== 'month' ? h('span', { class: 'sum-hint' }, 'Kéo khối hẹn để đổi giờ · kéo mép dưới để đổi thời lượng') : null].filter(Boolean));
   if (view === 'month') body.replaceChildren(monthView(from, appts, today, conflicts));
   else {
@@ -153,7 +153,7 @@ function timeGrid(days, appts, today, conflicts) {
       const nConf = dayAppts.filter(a => conflicts.has(a.appt_id)).length;
       return h('button', { class: 'tg-day' + (d === today ? ' today' : '') + (dt.getDay() === 0 ? ' sunday' : ''), onclick: () => openCalendar('day', d) },
         h('span', { class: 'wd' }, WD[dt.getDay()]), h('b', {}, dt.getDate()),
-        h('span', { class: 'cnt' + (nConf ? ' warn' : '') }, nConf ? `⚠ ${nConf}` : dayAppts.length ? `${dayAppts.length} hẹn` : ''));
+        h('span', { class: 'cnt' + (nConf ? ' warn' : '') }, nConf ? [icon('alert', 12), String(nConf)] : dayAppts.length ? `${dayAppts.length} hẹn` : ''));
     }));
   const allDay = h('div', { class: 'tg-allday' }, h('div', { class: 'tg-gutter' }, 'Chưa giờ'),
     days.map(d => h('div', { class: 'tg-allday-col' }, appts.filter(a => a.appt_date === d && !a.start_time).map(a =>
@@ -182,10 +182,10 @@ function timeGrid(days, appts, today, conflicts) {
         onkeydown: k => { if (k.key === 'Enter') apptSheet(a); } },
         h('div', { class: 'ev-top' },
           h('span', { class: 'ev-t' }, multi ? a.start_time : `${a.start_time}–${endTimeOf(a)}`),
-          isConf ? h('span', { class: 'ev-flag' }, '⚠') : a.result_visit_id ? h('span', { class: 'ev-flag ok' }, '✓') : null),
+          isConf ? h('span', { class: 'ev-flag' }, icon('alert', 13)) : a.result_visit_id ? h('span', { class: 'ev-flag ok' }, icon('check', 13)) : null),
         h('div', { class: 'ev-n' }, !multi && !compact ? avatar(a, 20) : null,
-          h('span', {}, compact && multi ? (isConf ? '⚠' : '') + a.start_time   // too short for a name in week view
-            : (compact ? a.start_time + ' ' : '') + (isConf && compact ? '⚠ ' : '') + (multi ? shortName(a.full_name) : a.full_name))),
+          h('span', {}, compact && multi && window.innerWidth < 720 ? a.start_time   // phone week view: too narrow for a name
+            : (compact ? a.start_time + ' ' : '') + (multi ? shortName(a.full_name) : a.full_name))),
         a.title && height > 58 ? h('div', { class: 'ev-d' }, a.title) : null,
         isConf && !multi && height > 76 ? h('div', { class: 'ev-warn' }, 'Trùng giờ') : null,
         a.status !== 'cancelled' ? h('div', { class: 'ev-resize', title: 'Kéo để đổi thời lượng' }) : null);
@@ -288,7 +288,7 @@ async function moveAppointment(a, after, before) {
       catch (e) { toast(errMsg(e), 'error'); }
     } };
     const when = `${fmtDate(after.appt_date).slice(0, 5)} ${after.start_time}–${minToTime(toMin(after.start_time) + Number(after.duration_min))}`;
-    if (r.conflicts.length) toast(`⚠ ${a.full_name} ${when} trùng giờ với ${r.conflicts.join(', ')}`, 'warn', undo);
+    if (r.conflicts.length) toast(`${a.full_name} ${when} trùng giờ với ${r.conflicts.join(', ')}`, 'warn', undo);
     else toast(`Đã dời ${a.full_name} sang ${when}`, '', undo);
   } catch (e) { toast(errMsg(e), 'error'); }
   pageCalendar();
@@ -304,7 +304,7 @@ function monthView(from, appts, today, conflicts) {
     return h('div', { class: 'mv-cell' + (dt.getMonth() !== month ? ' other' : '') + (d === today ? ' today' : '') + (nConf ? ' has-conflict' : ''),
       onclick: () => openCalendar('day', d) },
       h('div', { class: 'mv-top' }, h('span', { class: 'mv-date' }, dt.getDate()),
-        nConf ? h('span', { class: 'mv-warn', title: `${nConf} hẹn trùng giờ` }, '⚠ ' + nConf) : list.length > 3 ? h('span', { class: 'mv-count' }, list.length) : null),
+        nConf ? h('span', { class: 'mv-warn', title: `${nConf} hẹn trùng giờ` }, icon('alert', 12), String(nConf)) : list.length > 3 ? h('span', { class: 'mv-count' }, list.length) : null),
       list.slice(0, 3).map(a => h('button', { class: apptClass(a, conflicts) + ' mv-ev', onclick: e => { e.stopPropagation(); apptSheet(a); } },
         h('span', { class: 'tnum' }, a.start_time || '•'), h('span', { class: 'mv-name' }, ' ' + shortName(a.full_name)))),
       list.length > 3 ? h('div', { class: 'mv-more' }, `+${list.length - 3} nữa`) : null);
@@ -346,23 +346,23 @@ function apptSheet(a) {
     h('div', { class: 'sheet' + (partners.length ? ' sheet-conflict' : '') },
       h('div', { class: 'sheet-grip' }),
       h('div', { class: 'visit-head' }, h('div', { class: 'row-av' }, avatar(a, 52),
-        h('div', {}, h('h3', { style: 'margin:0' }, a.full_name), h('div', { class: 'muted' }, `${st.icon} ${st.label}`))),
+        h('div', {}, h('h3', { style: 'margin:0' }, a.full_name), h('div', { class: 'status-tag st-' + (a.status || 'scheduled') }, icon(st.icon, 14), st.label))),
         h('button', { class: 'icon-btn', onclick: close, 'aria-label': 'Đóng' }, '✕')),
       h('div', { class: 'sheet-when' }, h('b', {}, a.start_time ? `${a.start_time}–${endTimeOf(a)}` : 'Chưa đặt giờ'),
         h('span', {}, fmtDayLong(a.appt_date) + (a.duration_min ? ` · ${a.duration_min} phút` : ''))),
-      partners.length ? h('div', { class: 'alert warn-box' }, '⚠ Trùng giờ với ',
+      partners.length ? h('div', { class: 'alert warn-box' }, icon('alert', 18), 'Trùng giờ với ',
         partners.map((p, i) => [i ? ', ' : '', h('b', {}, p.full_name), ` (${p.start_time}–${endTimeOf(p)})`]),
         h('div', { style: 'font-weight:400;margin-top:4px' }, 'Đổi giờ để tránh trùng: bấm "Đổi giờ" hoặc kéo khối hẹn trên lịch.')) : null,
-      a.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + a.allergies) : null,
+      medAlerts(a),
       kv([['Nội dung', a.title], ['Ghi chú', a.notes], ['SĐT', phonesOf(a).join('\n')]]),
       a.result_visit_id
-        ? h('button', { class: 'primary big-cta', onclick: () => { close(); go('v/' + a.result_visit_id); } }, '📄 Xem / bổ sung kết quả khám')
-        : a.status !== 'cancelled' ? h('button', { class: 'primary big-cta', onclick: () => { close(); recordResult(a); } }, '📝 Ghi kết quả khám & tải ảnh') : null,
+        ? h('button', { class: 'primary big-cta', onclick: () => { close(); go('v/' + a.result_visit_id); } }, icon('file', 20), 'Xem / bổ sung kết quả khám')
+        : a.status !== 'cancelled' ? h('button', { class: 'primary big-cta', onclick: () => { close(); recordResult(a); } }, icon('note', 20), 'Ghi kết quả khám & tải ảnh') : null,
       h('div', { class: 'row-actions' },
-        a.status !== 'cancelled' ? h('button', { onclick: () => quick.classList.toggle('hidden') }, '🕒 Đổi giờ') : null,
-        a.status !== 'arrived' ? h('button', { onclick: () => setStatus('arrived') }, '✓ Đã đến') : null,
-        a.status !== 'no_show' ? h('button', { onclick: () => setStatus('no_show') }, '✗ Không đến') : null,
-        a.status !== 'cancelled' ? h('button', { onclick: () => setStatus('cancelled') }, '⊘ Huỷ hẹn') : h('button', { onclick: () => setStatus('scheduled') }, 'Khôi phục')),
+        a.status !== 'cancelled' ? h('button', { onclick: () => quick.classList.toggle('hidden') }, icon('clock', 16), 'Đổi giờ') : null,
+        a.status !== 'arrived' ? h('button', { onclick: () => setStatus('arrived') }, icon('check', 16), 'Đã đến') : null,
+        a.status !== 'no_show' ? h('button', { onclick: () => setStatus('no_show') }, icon('x', 16), 'Không đến') : null,
+        a.status !== 'cancelled' ? h('button', { onclick: () => setStatus('cancelled') }, icon('ban', 16), 'Huỷ hẹn') : h('button', { onclick: () => setStatus('scheduled') }, 'Khôi phục')),
       quick,
       h('div', { class: 'row-actions', style: 'margin:0' },
         h('button', { onclick: () => { close(); go('a/' + a.appt_id); } }, 'Sửa chi tiết'),
@@ -386,7 +386,7 @@ function patientPicker(initial, onPick) {
     h('div', { class: 'row-av' }, avatar(p, 44), h('div', { class: 'row-main' }, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
       phonesOf(p).length ? h('div', { class: 'muted' }, phonesOf(p).join(' · ')) : null)),
     h('button', { type: 'button', onclick: () => { onPick(null); showSearch(); } }, 'Đổi')),
-    ...(p.allergies ? [h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies)] : []));
+    ...(medAlerts(p) ? [medAlerts(p)] : []));
   const showSearch = () => {
     const q = h('input', { type: 'search', placeholder: 'Gõ tên, mã, SĐT hoặc CCCD…', autocomplete: 'off' });
     const res = h('div', { class: 'list' });
@@ -429,7 +429,7 @@ async function pageAppointmentForm(id) {
   updEnd();
   const title = h('input', { value: a.title || '', placeholder: 'VD: Lắp mão sứ R46', oninput: () => { dirty = true; } });
   const notes = h('textarea', { value: a.notes || '', oninput: () => { dirty = true; } });
-  const status = h('select', { onchange: () => { dirty = true; } }, Object.entries(APPT_STATUS).map(([k, s]) => h('option', { value: k, selected: k === a.status }, s.icon + ' ' + s.label)));
+  const status = h('select', { onchange: () => { dirty = true; } }, Object.entries(APPT_STATUS).map(([k, s]) => h('option', { value: k, selected: k === a.status }, s.label)));
   const field = (label, el, full) => h('div', { class: full ? 'full' : '' }, h('label', {}, label), el);
   const back = () => { calState.date = date.value || calState.date; go('calendar'); };
   const save = h('button', { class: 'primary', onclick: async () => {
@@ -445,18 +445,18 @@ async function pageAppointmentForm(id) {
     } catch (e) { toast(errMsg(e), 'error'); save.disabled = false; }
   } }, 'Lưu');
   mount(
-    h('div', { class: 'row-actions' }, h('button', { onclick: back }, '← Lịch hẹn')),
-    h('section', { class: 'card' }, h('h2', {}, id ? 'Sửa lịch hẹn' : 'Lịch hẹn mới'),
+    pageHead(id ? 'Sửa lịch hẹn' : 'Lịch hẹn mới', { back }),
+    h('section', { class: 'panel' },
       h('div', { class: 'grid-form' },
         field('Bệnh nhân *', picker, true),
         field('Ngày *', date), field('Giờ bắt đầu', time),
         field('Thời lượng dự kiến', h('div', {}, dur.el, endInfo), true),
         field('Nội dung', title, true), field('Ghi chú', notes, true),
-        id ? field('Trạng thái', status) : null),
-      h('div', { class: 'row-actions', style: 'margin-top:12px' }, save, h('button', { onclick: back }, 'Huỷ'),
-        id ? h('button', { class: 'danger', onclick: async () => {
-          if (!confirm('Xoá lịch hẹn này?')) return;
-          try { await api('deleteAppointment', id); dirty = false; toast('Đã xoá lịch hẹn'); back(); } catch (e) { toast(errMsg(e), 'error'); }
-        } }, 'Xoá') : null)));
+        id ? field('Trạng thái', status) : null)),
+    h('div', { class: 'action-bar' }, save, h('button', { onclick: back }, 'Huỷ'),
+      id ? h('button', { class: 'danger', onclick: async () => {
+        if (!confirm('Xoá lịch hẹn này?')) return;
+        try { await api('deleteAppointment', id); dirty = false; toast('Đã xoá lịch hẹn'); back(); } catch (e) { toast(errMsg(e), 'error'); }
+      } }, 'Xoá') : null));
 }
 </script>

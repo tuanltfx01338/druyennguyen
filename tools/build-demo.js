@@ -20,16 +20,24 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0F1E3D">
 <title>Sổ bệnh án Nha khoa — bản xem thử giao diện</title>
 ${client('Styles')}
 <style>
-  .demo-banner { background:#fff8e1; color:#7a5200; font-size:12px; padding:6px 12px; text-align:center; border-bottom:1px solid #f3dfa5; }
-  .demo-banner button { font-size:12px; padding:2px 8px; margin-left:6px; }
+  .demo-banner { background:#FFF3DC; color:#7A4600; font-size:12px; padding:6px 12px; text-align:center; border-bottom:1px solid #F4C46A; }
+  .demo-banner button { font-size:12px; min-height:26px; padding:2px 8px; margin-left:6px; }
+  @media (min-width: 960px) { .demo-banner { margin-left:228px; } }
 </style>
 </head>
 <body>
 <div class="demo-banner">BẢN XEM THỬ · dữ liệu giả, chỉ nằm trong trang (tải lại = về ban đầu)<button onclick="demoBack()">↩ Quay lại</button></div>
-<header class="topbar"><a href="#" id="home-link">🦷 Sổ bệnh án</a><nav><a href="#" data-path="">Tổng quan</a><a href="#" data-path="calendar">Lịch hẹn</a><a href="#" data-path="patients">Bệnh nhân</a></nav></header>
+<nav class="nav" aria-label="Điều hướng">
+  <a href="#" class="brand" data-path="" data-icon="tooth">Sổ bệnh án</a>
+  <a href="#" data-path="" data-icon="today">Hôm nay</a>
+  <a href="#" data-path="calendar" data-icon="calendar">Lịch hẹn</a>
+  <a href="#" data-path="patients" data-icon="users">Bệnh nhân</a>
+  <button type="button" id="nav-add" class="nav-add" data-icon="plus">Thêm</button>
+</nav>
 <main id="app"></main>
 <div id="toast" role="status"></div>
 <script>

@@ -3,17 +3,17 @@
 /* Import wizard: B1 file xlsx → B2 dry-run report → B3 ghi theo lô → B4/B5 ghép & di chuyển ảnh cũ. */
 function pageImport() {
   const fileInput = h('input', { type: 'file', accept: '.xlsx' });
-  const step1 = h('section', { class: 'card' },
+  const step1 = h('section', { class: 'panel' },
     h('h3', {}, 'B1. Chọn file Excel theo mẫu Mau_nhap_benh_nhan_cu.xlsx'),
     h('div', { class: 'muted' }, 'Đã xoá dòng VÍ DỤ. Chưa ghi gì vào dữ liệu cho tới khi bạn bấm xác nhận ở B2.'),
     fileInput, h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { class: 'primary', onclick: preview }, 'Xem trước')));
-  const step2 = h('section', { class: 'card hidden' });
-  const step3 = h('section', { class: 'card' },
+  const step2 = h('section', { class: 'panel hidden' });
+  const step3 = h('section', { class: 'panel' },
     h('h3', {}, 'Ảnh cũ'),
     h('div', { class: 'muted' }, 'Chép các thư mục ảnh (tên dạng 0001_Nguyen Van An) vào Google Drive: NhaKhoa/_import/, rồi bấm Kiểm tra. Ảnh được DI CHUYỂN (không nhân đôi dung lượng), giữ bản gốc.'),
     h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { onclick: matchImages }, 'Kiểm tra thư mục ảnh')));
   const step4 = h('div');
-  mount(h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Trang chủ')), h('h2', {}, 'Nhập dữ liệu cũ'), step1, step2, step3, step4);
+  mount(pageHead('Nhập dữ liệu cũ', { back: () => go(''), sub: 'Từ file Excel mẫu và thư mục ảnh trên Drive' }), step1, step2, step3, step4);
 
   async function preview() {
     const file = fileInput.files[0];
@@ -50,7 +50,7 @@ function pageImport() {
         prog.textContent = `Đã xử lý ${r.next}/${r.total} bệnh nhân…`;
         if (r.done) break;
       }
-      prog.textContent = `✓ Xong: tạo ${created} hồ sơ, bỏ qua ${skipped} hồ sơ đã có.`;
+      prog.textContent = `Xong: tạo ${created} hồ sơ, bỏ qua ${skipped} hồ sơ đã có.`;
       toast('Nhập xong');
     } catch (e) {
       prog.textContent = `Dừng ở ${offset}: ${errMsg(e)}. Bấm lại để chạy tiếp (không tạo trùng).`;
@@ -59,7 +59,7 @@ function pageImport() {
   }
 
   async function matchImages() {
-    step4.replaceChildren(h('div', { class: 'card muted' }, 'Đang kiểm tra…'));
+    step4.replaceChildren(h('div', { class: 'panel muted' }, 'Đang kiểm tra…'));
     let r;
     try { r = await api('importImagesMatch'); } catch (e) { return step4.replaceChildren(errBox(e, matchImages)); }
     const manual = new Map();
@@ -68,7 +68,7 @@ function pageImport() {
       return h('tr', {}, h('td', {}, u.folder), h('td', {}, u.imageCount), h('td', {}, inp));
     });
     const runBtn = h('button', { class: 'primary', onclick: () => moveAll(r, manual, runBtn) }, 'Di chuyển ảnh vào hồ sơ');
-    step4.replaceChildren(h('section', { class: 'card' },
+    step4.replaceChildren(h('section', { class: 'panel' },
       h('h3', {}, `Khớp: ${r.matched.length} thư mục · Không khớp: ${r.unmatched.length}`),
       r.matched.length ? h('table', { class: 'report' }, h('tr', {}, h('th', {}, 'Thư mục'), h('th', {}, 'Số ảnh'), h('th', {}, 'Hồ sơ')),
         r.matched.map(m => h('tr', {}, h('td', {}, m.folder), h('td', {}, m.imageCount), h('td', {}, m.patient_id + ' ' + m.full_name)))) : null,
@@ -94,8 +94,8 @@ function pageImport() {
         do { res = await api('importImagesMove', j.folderId, j.patientId); moved += res.moved; cur.textContent = `${j.folder}: ${moved} ảnh…`; }
         while (!res.done && res.moved > 0);
         ok++;
-        log.append(h('div', {}, `✓ ${j.folder} → ${j.patientId}: ${moved} ảnh` + (res.leftoverNonImages ? ' (còn file không phải ảnh, để lại trong _import)' : '')));
-      } catch (e) { log.append(h('div', { class: 'err' }, `✗ ${j.folder}: ${errMsg(e)}`)); }
+        log.append(h('div', {}, `Đã chuyển ${j.folder} vào ${j.patientId}: ${moved} ảnh` + (res.leftoverNonImages ? ' (còn file không phải ảnh, để lại trong _import)' : '')));
+      } catch (e) { log.append(h('div', { class: 'err' }, `Lỗi ${j.folder}: ${errMsg(e)}`)); }
     }
     uploadBusy = false;
     cur.textContent = '';

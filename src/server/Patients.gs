@@ -28,7 +28,7 @@ function searchPatients(q) {
     }
     return res.map(function (p) {
       return { patient_id: p.patient_id, full_name: p.full_name, birth_year: p.birth_year, phone: p.phone, allergies: p.allergies,
-        national_id: p.national_id, avatar_id: p.avatar_id };
+        national_id: p.national_id, avatar_id: p.avatar_id, dob: p.dob, gender: p.gender };
     });
   });
 }

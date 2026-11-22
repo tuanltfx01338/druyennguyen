@@ -178,6 +178,7 @@ test('buildDashboard (no money): counts, appointments, missed', () => {
   assert.deepEqual(d.missed.map(u => u.appt_id), ['m2', 'm1']); // most recent first
   assert.deepEqual(d.todayVisits.map(x => x.visit_id), [1]);
   assert.deepEqual(d.todayAppts.map(x => [x.appt_id, x.result_visit_id]), [['x2', 1], ['x1', '']]);
+  assert.equal(d.todayAppts[1].last_visit.visit_date, '2026-10-01'); // last visit before today, not today's
   assert.deepEqual(d.walkIns, []); // visit 1 is the result of appointment x2, not a walk-in
   const d2 = JSON.parse(JSON.stringify(L.buildDashboard(P, V, '2026-11-21', A.filter(a => a.appt_id !== 'x2'))));
   assert.deepEqual(d2.walkIns.map(x => x.visit_id), [1]);

@@ -318,15 +318,24 @@ function buildDashboard(patients, visits, today, appointments) {
     var i = months.indexOf(String(v.visit_date).slice(0, 7));
     if (i >= 0) monthly[i].visits++;
     if (v.visit_date === today) todayVisits.push({ patient_id: v.patient_id, full_name: byId[v.patient_id].full_name,
-      avatar_id: byId[v.patient_id].avatar_id, visit_id: v.visit_id, reason: v.reason, diagnosis: v.diagnosis });
+      avatar_id: byId[v.patient_id].avatar_id, allergies: byId[v.patient_id].allergies, visit_id: v.visit_id, reason: v.reason, diagnosis: v.diagnosis });
   });
   var resultIds = {};
   (appointments || []).forEach(function (a) { if (a.result_visit_id) resultIds[a.result_visit_id] = true; });
+  // Latest visit before today per patient — what the doctor wants to recall before the patient sits down.
+  var lastVisit = {};
+  real.forEach(function (v) {
+    if (v.visit_date >= today) return;
+    var cur = lastVisit[v.patient_id];
+    if (!cur || v.visit_date > cur.visit_date) lastVisit[v.patient_id] = v;
+  });
   var pub = function (a) {
-    var p = byId[a.patient_id];
+    var p = byId[a.patient_id], lv = lastVisit[a.patient_id];
     return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: p.full_name, phone: p.phone, avatar_id: p.avatar_id,
-      allergies: p.allergies, appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title,
-      status: a.status, result_visit_id: a.result_visit_id || '' };
+      allergies: p.allergies, systemic_diseases: p.systemic_diseases, gender: p.gender, dob: p.dob, birth_year: p.birth_year,
+      appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title, notes: a.notes,
+      status: a.status, result_visit_id: a.result_visit_id || '',
+      last_visit: lv ? { visit_date: lv.visit_date, diagnosis: lv.diagnosis, treatment: lv.treatment, plan: lv.plan, teeth: lv.teeth } : null };
   };
   var mine = (appointments || []).filter(function (a) { return byId[a.patient_id]; });
   var to = addDays(today, 7), since = addDays(today, -30);

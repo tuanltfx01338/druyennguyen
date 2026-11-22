@@ -55,8 +55,86 @@ function blobToBase64(blob) {
   });
 }
 
+/* ---------- icons (inline SVG, static strings only — never user data) ---------- */
+const ICONS = {
+  today: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M16 3v4M8 3v4M3 10h18"/>',
+  users: '<circle cx="9" cy="8" r="3.6"/><path d="M2.5 20.5c.4-3.6 3-5.6 6.5-5.6s6.1 2 6.5 5.6M15.5 4.6a3.6 3.6 0 0 1 0 6.8M21.5 20.5c-.3-2.6-1.7-4.3-4-5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  alert: '<path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4.2M12 17.2v.1"/>',
+  phone: '<path d="M5.5 3.5h3.2l1.6 4.4-2.2 1.4a11.5 11.5 0 0 0 6.6 6.6l1.4-2.2 4.4 1.6v3.2a1.5 1.5 0 0 1-1.6 1.5A17 17 0 0 1 4 5.1a1.5 1.5 0 0 1 1.5-1.6z"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  note: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2.8h6V4M8.5 10h7M8.5 13.5h7M8.5 17h4"/>',
+  file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
+  back: '<path d="m15 5-7 7 7 7"/>',
+  next: '<path d="m9 5 7 7-7 7"/>',
+  ban: '<circle cx="12" cy="12" r="8.5"/><path d="m6 6 12 12"/>',
+  image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="m21 16-5-5-8.5 8"/>',
+  upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/>',
+  trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>',
+  tooth: '<path d="M8 3.2c-3 0-5 2.2-5 5.4 0 3 1.4 4.4 2 7 .6 2.9 1.2 5.2 2.5 5.2 1.6 0 1.6-4.8 4.5-4.8s2.9 4.8 4.5 4.8c1.3 0 1.9-2.3 2.5-5.2.6-2.6 2-4 2-7 0-3.2-2-5.4-5-5.4-1.8 0-2.6.9-4 .9s-2.2-.9-4-.9z"/>',
+  pill: '<path d="M10.6 20.4a5 5 0 0 1-7-7l9.8-9.8a5 5 0 0 1 7 7z"/><path d="m8.5 8.5 7 7"/>',
+  heart: '<path d="M12 20s-7.5-4.4-7.5-10A4.3 4.3 0 0 1 12 7.4 4.3 4.3 0 0 1 19.5 10c0 5.6-7.5 10-7.5 10z"/>',
+  history: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v4.5l3 1.8"/>',
+  more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  import: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M4 19h16"/>',
+};
+function icon(name, size = 20) {
+  const el = document.createElement('span');
+  el.className = 'ic ic-' + name;
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
+  return el;
+}
+
+/** Age in years from dob ('yyyy-mm-dd') or birth_year. */
+function ageOf(p) {
+  const now = new Date();
+  if (p.dob) { const [y, m, d] = p.dob.split('-').map(Number); let a = now.getFullYear() - y; if (now.getMonth() + 1 < m || (now.getMonth() + 1 === m && now.getDate() < d)) a--; return a; }
+  return p.birth_year ? now.getFullYear() - Number(p.birth_year) : null;
+}
+const ageText = p => { const a = ageOf(p); return a == null ? '' : a + ' tuổi'; };
+
+/** Small row of facts separated by spacing (no joined strings). */
+function facts(...parts) { return h('div', { class: 'facts' }, parts.filter(Boolean).map(x => h('span', {}, x))); }
+
+/** Medical alerts a doctor must see before treating: allergy (red), systemic disease (amber). */
+function medAlerts(p, big = false) {
+  const out = [];
+  if (p.allergies) out.push(h('div', { class: 'med med-allergy' + (big ? ' big' : '') }, icon('alert', big ? 20 : 16), h('span', {}, h('b', {}, 'Dị ứng: '), p.allergies)));
+  if (p.systemic_diseases) out.push(h('div', { class: 'med med-sys' + (big ? ' big' : '') }, icon('heart', big ? 20 : 16), h('span', {}, h('b', {}, 'Bệnh nền: '), p.systemic_diseases)));
+  return out.length ? h('div', { class: 'meds' }, out) : null;
+}
+
+/** Page header: optional back button, title, subtitle, trailing actions. */
+function pageHead(title, { sub, back, actions } = {}) {
+  return h('header', { class: 'ph' },
+    back ? h('button', { class: 'icon-btn ph-back', 'aria-label': 'Quay lại', onclick: back }, icon('back', 22)) : null,
+    h('div', { class: 'ph-text' }, h('h1', {}, title), sub ? h('div', { class: 'ph-sub' }, sub) : null),
+    actions ? h('div', { class: 'ph-actions' }, actions) : null);
+}
+
+/** "Thêm" menu (bottom sheet): every create action in one place. */
+function openAddMenu() {
+  const close = () => wrap.remove();
+  const item = (ic, label, sub, fn) => h('button', { class: 'menu-item', onclick: () => { close(); fn(); } },
+    h('span', { class: 'menu-ic' }, icon(ic, 22)), h('span', { class: 'menu-text' }, h('b', {}, label), h('span', {}, sub)));
+  const wrap = h('div', { class: 'sheet-wrap', onclick: e => { if (e.target === wrap) close(); } },
+    h('div', { class: 'sheet' }, h('div', { class: 'sheet-grip' }),
+      item('note', 'Ghi khám không hẹn', 'Bệnh nhân đến không đặt lịch', () => go('walkin')),
+      item('calendar', 'Lịch hẹn mới', 'Chọn bệnh nhân, ngày giờ, thời lượng', () => newAppointment()),
+      item('users', 'Bệnh nhân mới', 'Tạo hồ sơ, chụp ảnh chân dung', () => go('p/new')),
+      item('import', 'Nhập dữ liệu cũ', 'Từ file Excel mẫu và thư mục ảnh', () => go('import'))));
+  document.body.append(wrap);
+}
+
 /* ---------- avatar (portrait) ---------- */
-const AV_COLORS = ['#00897b', '#5c6bc0', '#8d6e63', '#00838f', '#7cb342', '#f4511e', '#6d4c41', '#3949ab'];
+const AV_COLORS = ['#2457F5', '#0E9F6E', '#7A4FD1', '#D9480F', '#0B7285', '#B5179E', '#5C6B82', '#2B8A3E'];
 const initialsOf = n => { const w = String(n || '?').trim().split(/\s+/); return ((w.length > 1 ? w[w.length - 2][0] : '') + w[w.length - 1][0]).toUpperCase(); };
 const avatarQueue = new Map(); // avatar_id → [elements waiting for the image]
 let avatarTimer;
@@ -122,26 +200,28 @@ const currentPath = () => curPath;
 function render(path) {
   curPath = path;
   window.scrollTo(0, 0);
-  document.querySelectorAll('.topbar nav a').forEach(a => a.classList.toggle('active', a.dataset.path === (path.split('/')[0] === 'a' ? 'calendar' : path === '' ? '' : path.startsWith('p/') ? 'patients' : path)));
+  const section = path === '' || path === 'walkin' ? '' : path.split('/')[0] === 'a' || path === 'calendar' ? 'calendar' : 'patients';
+  document.querySelectorAll('.nav a[data-path]').forEach(a => a.classList.toggle('active', a.dataset.path === section && !a.classList.contains('brand')));
   for (const [re, fn] of routes) { const m = path.match(re); if (m) return fn(m); }
   pageDashboard();
 }
 function start() {
-  document.getElementById('home-link').addEventListener('click', e => { e.preventDefault(); go(''); });
-  document.querySelectorAll('.topbar nav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.path); }));
+  document.querySelectorAll('.nav [data-icon]').forEach(el => el.prepend(icon(el.dataset.icon, 24)));
+  document.querySelectorAll('.nav a[data-path]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.path); }));
+  document.getElementById('nav-add').addEventListener('click', openAddMenu);
   google.script.history.setChangeHandler(e => { dirty = false; uploadBusy = false; render((e.state && e.state.path) || ''); });
   window.addEventListener('beforeunload', e => { if (dirty || uploadBusy) { e.preventDefault(); e.returnValue = ''; } });
   google.script.url.getLocation(loc => render(loc.hash || ''));
 }
 
-/* ---------- home ---------- */
+/* ---------- list rows ---------- */
 function patientRow(p) {
   return h('a', { href: '#', class: 'item row-av', onclick: e => { e.preventDefault(); go('p/' + p.patient_id); } },
     avatar(p, 44),
     h('div', { class: 'row-main' },
-      h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
-        p.allergies ? h('span', { class: 'badge red' }, 'Dị ứng') : null),
-      h('div', { class: 'muted' }, [p.birth_year ? 'Sinh ' + p.birth_year : '', phonesOf(p).join(' · '), p.national_id ? 'CCCD ' + p.national_id : ''].filter(Boolean).join(' · '))));
+      h('div', { class: 'row-title' }, h('b', {}, p.full_name), p.allergies ? h('span', { class: 'dot-alert', title: 'Dị ứng: ' + p.allergies }, icon('alert', 14), 'Dị ứng') : null),
+      facts(p.patient_id, ageText(p), phonesOf(p)[0], p.national_id ? 'CCCD ' + p.national_id : '')),
+    icon('next', 18));
 }
 /** List row with a small avatar for dashboard/calendar lists. */
 function avRow(p, onclick, ...main) {
@@ -151,7 +231,7 @@ function avRow(p, onclick, ...main) {
 /* ---------- patients list (search) ---------- */
 let pendingQuery = '';
 function pagePatients() {
-  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tìm tên (không dấu cũng được), mã BN, SĐT hoặc CCCD…', autocomplete: 'off', value: pendingQuery });
+  const q = h('input', { type: 'search', class: 'search', placeholder: 'Tên, mã, SĐT hoặc CCCD', autocomplete: 'off', value: pendingQuery, 'aria-label': 'Tìm bệnh nhân' });
   pendingQuery = '';
   const results = h('div', { class: 'list' });
   const from = h('input', { type: 'date', value: todayStr(-30) });
@@ -161,47 +241,48 @@ function pagePatients() {
   let timer, seq = 0;
   async function doSearch() {
     const my = ++seq;
-    results.replaceChildren(h('div', { class: 'muted' }, 'Đang tìm…'));
+    results.replaceChildren(h('div', { class: 'muted pad' }, 'Đang tìm…'));
     try {
       const list = await api('searchPatients', q.value);
       if (my !== seq) return;
       results.replaceChildren(
-        h('div', { class: 'muted' }, q.value ? `${list.length} kết quả` : 'Cập nhật gần đây'),
+        h('div', { class: 'list-cap' }, q.value ? `${list.length} kết quả` : 'Mở gần đây'),
         ...(list.length ? list.map(patientRow)
-          : [h('div', { class: 'muted' }, q.value ? 'Không tìm thấy bệnh nhân' : 'Chưa có bệnh nhân nào')]));
+          : [h('div', { class: 'empty' }, q.value ? 'Không có bệnh nhân khớp. Thử gõ ít chữ hơn hoặc tìm theo SĐT.' : 'Chưa có bệnh nhân nào. Bấm "Bệnh nhân mới" để tạo hồ sơ đầu tiên.')]));
     } catch (e) { results.replaceChildren(errBox(e, doSearch)); }
   }
   async function searchDates() {
     if (!from.value || !to.value || from.value > to.value) return toast('Khoảng ngày không hợp lệ', 'warn');
-    visitsBox.replaceChildren(h('div', { class: 'muted' }, 'Đang lọc…'));
+    visitsBox.replaceChildren(h('div', { class: 'muted pad' }, 'Đang lọc…'));
     try {
       const list = await api('searchVisitsByDate', from.value, to.value);
-      visitsBox.replaceChildren(h('div', { class: 'muted' }, list.length + ' lần khám'),
-        ...list.map(v => avRow(v, () => go('p/' + v.patient_id), h('div', {}, h('b', {}, fmtDate(v.visit_date)), ' · ', v.full_name,
-          h('span', { class: 'badge' }, v.patient_id)), h('div', { class: 'muted' }, v.diagnosis || v.treatment || ''))));
+      visitsBox.replaceChildren(h('div', { class: 'list-cap' }, list.length + ' lần khám'),
+        ...list.map(v => avRow(v, () => go('p/' + v.patient_id), h('div', { class: 'row-title' }, h('b', {}, v.full_name)),
+          facts(fmtDate(v.visit_date), v.diagnosis || v.treatment || ''))));
     } catch (e) { visitsBox.replaceChildren(errBox(e, searchDates)); }
   }
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 300); });
 
   mount(
-    h('div', { class: 'row-actions' },
-      h('button', { class: 'primary', onclick: () => go('p/new') }, '+ Bệnh nhân'),
-      h('button', { onclick: () => go('import') }, 'Nhập dữ liệu cũ')),
-    h('section', { class: 'card' }, h('h3', {}, 'Bệnh nhân'), q, results),
-    h('section', { class: 'card' }, h('h3', {}, 'Tìm theo ngày khám'),
-      h('div', { class: 'date-range' }, 'Từ', from, 'đến', to, h('button', { onclick: searchDates }, 'Lọc')), visitsBox));
+    pageHead('Bệnh nhân', { actions: [h('button', { class: 'primary', onclick: () => go('p/new') }, icon('plus', 18), 'Bệnh nhân mới')] }),
+    h('div', { class: 'search-bar' }, icon('search', 20), q),
+    h('section', { class: 'panel' }, results),
+    h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Tìm theo ngày khám'),
+      h('div', { class: 'date-range' }, h('label', {}, 'Từ', from), h('label', {}, 'Đến', to), h('button', { onclick: searchDates }, 'Lọc')), visitsBox));
   q.focus();
   doSearch();
 }
 
-/* ---------- dashboard (landing page) ---------- */
-const CHART_COLOR = '#00897b'; // single series; passes dataviz validator (lightness, chroma, contrast) on white
-const dayLabel = (d, today) => d === today ? 'Hôm nay' : d === addDaysStr(today, 1) ? 'Ngày mai' : fmtDate(d);
+/* ---------- dashboard (landing page "Hôm nay") ---------- */
+const CHART_COLOR = '#2457F5'; // single series on white; validated with the dataviz palette script
+const dayLabel = (d, today) => d === today ? 'Hôm nay' : d === addDaysStr(today, 1) ? 'Ngày mai' : fmtDate(d).slice(0, 5);
 function addDaysStr(s, n) { const [y, m, d] = s.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, d + n)); return t.toISOString().slice(0, 10); }
+const nowMinutes = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
+const hm = t => { const [a, b] = t.split(':').map(Number); return a * 60 + b; };
 
 function statTile(label, value, sub, onclick, tone) {
   return h(onclick ? 'button' : 'div', { class: 'stat' + (tone ? ' ' + tone : ''), onclick },
-    h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, value), sub ? h('div', { class: 'stat-sub' }, sub) : null);
+    h('div', { class: 'stat-value' }, value), h('div', { class: 'stat-label' }, label), sub ? h('div', { class: 'stat-sub' }, sub) : null);
 }
 
 /** Single-series column chart (one axis), value label on the current month, tap/hover shows the rest. */
@@ -211,21 +292,19 @@ function monthChart(monthly, key, unitFmt) {
   const top = Math.max(step * 2, step * Math.ceil(max / step));
   const caption = h('div', { class: 'chart-cap' }, 'Chạm vào cột để xem số liệu');
   const ticks = [0, top / 2, top].map(t => h('div', { class: 'grid-line', style: `bottom:${t / top * 100}%` }, h('span', {}, unitFmt(t))));
-  const bars = monthly.map((m, i) => {
+  const cols = monthly.map((m, i) => {
     const [y, mo] = m.month.split('-');
     const text = `Tháng ${Number(mo)}/${y}: ${m[key]} lần khám`;
     const show = () => { caption.textContent = text; cols.forEach(c => c.classList.remove('sel')); col.classList.add('sel'); };
-    const isLast = i === monthly.length - 1;
     const col = h('button', { class: 'col', 'aria-label': text, onclick: show, onmouseenter: show },
       h('div', { class: 'col-plot' },
         h('div', { class: 'bar-wrap', style: `height:${m[key] / top * 100}%` },
-          isLast ? h('span', { class: 'col-val' }, unitFmt(m[key])) : null,
+          i === monthly.length - 1 ? h('span', { class: 'col-val' }, unitFmt(m[key])) : null,
           h('i', { style: `background:${CHART_COLOR}` }))),
       h('div', { class: 'col-x' }, 'T' + Number(mo)));
     return col;
   });
-  const cols = bars;
-  return h('div', {}, h('div', { class: 'chart' }, h('div', { class: 'grid' }, ticks), h('div', { class: 'cols' }, bars)), caption);
+  return h('div', {}, h('div', { class: 'chart' }, h('div', { class: 'grid' }, ticks), h('div', { class: 'cols' }, cols)), caption);
 }
 function niceStep(x) {
   if (x <= 0) return 1;
@@ -233,96 +312,138 @@ function niceStep(x) {
   return [1, 2, 5, 10].map(k => k * p).find(v => v >= x);
 }
 
-/** Today's work list: each appointment has a one-tap "record result" action; walk-ins listed below. */
+/** The appointment the doctor should get ready for: first one today not yet recorded, not missed/cancelled. */
+function nextPatientOf(d) {
+  const open = d.todayAppts.filter(a => !a.result_visit_id && a.status !== 'cancelled' && a.status !== 'no_show');
+  const timed = open.filter(a => a.start_time);
+  return timed.find(a => hm(a.start_time) + (Number(a.duration_min) || 30) >= nowMinutes()) || timed[timed.length - 1] || open[0] || null;
+}
+
+function timingText(a) {
+  if (!a.start_time) return 'Chưa đặt giờ';
+  const diff = hm(a.start_time) - nowMinutes();
+  if (diff > 90) return `Còn ${Math.floor(diff / 60)} giờ ${diff % 60 ? diff % 60 + ' phút' : ''}`.trim();
+  if (diff > 0) return `Còn ${diff} phút`;
+  if (diff > -(Number(a.duration_min) || 30)) return 'Đang trong giờ hẹn';
+  return `Trễ ${-diff} phút`;
+}
+
+/** Hero: the next patient — time, who, medical alerts, what was done last time, one-tap actions. */
+function nextPatientHero(a) {
+  if (!a) return null;
+  const late = a.start_time && hm(a.start_time) + (Number(a.duration_min) || 30) < nowMinutes();
+  const lv = a.last_visit;
+  return h('section', { class: 'hero' + (late ? ' late' : '') },
+    h('div', { class: 'hero-time' },
+      h('span', { class: 'hero-kicker' }, 'Bệnh nhân tiếp theo'),
+      h('span', { class: 'hero-clock' }, a.start_time || '—'),
+      h('span', { class: 'hero-when' }, timingText(a) + (a.duration_min ? ` · dự kiến ${a.duration_min} phút` : ''))),
+    h('div', { class: 'hero-who' }, avatar(a, 60),
+      h('div', {}, h('div', { class: 'hero-name' }, a.full_name), facts(ageText(a), a.gender, a.patient_id))),
+    medAlerts(a, true),
+    a.title ? h('div', { class: 'hero-line' }, h('span', {}, 'Hẹn để'), h('b', {}, a.title)) : null,
+    lv ? h('div', { class: 'hero-line' }, h('span', {}, 'Lần trước ' + fmtDate(lv.visit_date).slice(0, 5)),
+      h('b', {}, [lv.diagnosis, lv.treatment].filter(Boolean).join(', ') || '—'),
+      lv.plan ? h('span', { class: 'hero-plan' }, 'Kế hoạch: ' + lv.plan) : null) : h('div', { class: 'hero-line' }, h('span', {}, 'Lần đầu đến khám')),
+    h('div', { class: 'hero-actions' },
+      h('button', { class: 'cta', onclick: () => recordResult(a) }, icon('note', 20), 'Ghi kết quả'),
+      h('button', { class: 'ghost', onclick: () => go('p/' + a.patient_id) }, 'Hồ sơ'),
+      phonesOf(a)[0] ? h('a', { class: 'btn ghost icon-only', href: 'tel:' + phonesOf(a)[0].replace(/\s/g, ''), 'aria-label': 'Gọi ' + phonesOf(a)[0] }, icon('phone', 20)) : null));
+}
+
+/** Today's work list in time order; recorded ones collapse to a check, walk-ins listed after. */
 function todayCard(d) {
+  const active = d.todayAppts.filter(a => a.status !== 'cancelled');
   const done = d.todayAppts.filter(a => a.result_visit_id).length;
+  const pct = active.length ? Math.round(done / active.length * 100) : 0;
   const rows = d.todayAppts.map(a => {
-    const action = a.result_visit_id
-      ? h('button', { class: 'small', onclick: e => { e.stopPropagation(); go('v/' + a.result_visit_id); } }, '📄 Kết quả')
-      : a.status === 'cancelled' ? h('span', { class: 'muted' }, 'Đã huỷ')
-      : h('button', { class: 'primary small', onclick: e => { e.stopPropagation(); recordResult(a); } }, '📝 Ghi kết quả');
-    return h('div', { class: 'item row-av today-row' + (a.status === 'cancelled' ? ' cancelled' : ''), onclick: () => apptSheet(a) },
-      avatar(a, 40),
+    const state = a.result_visit_id ? 'done' : a.status === 'cancelled' ? 'cancelled' : a.status === 'no_show' ? 'missed' : 'todo';
+    const action = state === 'done'
+      ? h('button', { class: 'small ok', onclick: e => { e.stopPropagation(); go('v/' + a.result_visit_id); } }, icon('check', 16), 'Kết quả')
+      : state === 'todo' ? h('button', { class: 'primary small', onclick: e => { e.stopPropagation(); recordResult(a); } }, 'Ghi kết quả')
+      : h('span', { class: 'state-tag' }, state === 'missed' ? 'Không đến' : 'Đã huỷ');
+    return h('div', { class: 'item tl-row ' + state, onclick: () => apptSheet(a) },
+      h('div', { class: 'tl-time' }, h('b', {}, a.start_time || '—'), a.duration_min ? h('span', {}, a.duration_min + "'") : null),
+      avatar(a, 38),
       h('div', { class: 'row-main' },
-        h('div', {}, h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name),
-          a.allergies ? h('span', { class: 'badge red' }, 'Dị ứng') : null,
-          a.result_visit_id ? h('span', { class: 'badge' }, '✓ Đã ghi') : a.status === 'no_show' ? h('span', { class: 'badge red' }, '✗ Không đến') : null),
-        h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title].filter(Boolean).join(' · '))),
+        h('div', { class: 'row-title' }, h('b', {}, a.full_name), a.allergies ? h('span', { class: 'dot-alert', title: 'Dị ứng: ' + a.allergies }, icon('alert', 14), 'Dị ứng') : null),
+        a.title ? h('div', { class: 'row-sub' }, a.title) : null),
       action);
   });
-  const walk = d.walkIns.map(v => avRow(v, () => go('v/' + v.visit_id),
-    h('div', {}, h('b', {}, v.full_name), h('span', { class: 'badge' }, 'Khám không hẹn')),
-    h('div', { class: 'muted' }, [v.reason, v.diagnosis].filter(Boolean).join(' · '))));
-  return h('section', { class: 'card today-card' },
-    h('div', { class: 'visit-head' },
-      h('h3', { style: 'margin:0' }, `Lịch khám hôm nay · đã ghi ${done}/${d.todayAppts.filter(a => a.status !== 'cancelled').length}`),
-      h('button', { onclick: () => go('walkin') }, '+ Khám không hẹn')),
-    h('div', { class: 'list' }, rows.length || walk.length ? [...rows, ...walk] : [h('div', { class: 'muted', style: 'padding:6px' }, 'Hôm nay chưa có lịch hẹn — bấm "+ Khám không hẹn" để ghi lần khám')]));
+  const walk = d.walkIns.map(v => h('div', { class: 'item tl-row done', onclick: () => go('v/' + v.visit_id) },
+    h('div', { class: 'tl-time' }, h('span', {}, 'Không hẹn')), avatar(v, 38),
+    h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, h('b', {}, v.full_name)), h('div', { class: 'row-sub' }, [v.reason, v.diagnosis].filter(Boolean).join(', '))),
+    h('button', { class: 'small ok', onclick: e => { e.stopPropagation(); go('v/' + v.visit_id); } }, icon('check', 16), 'Kết quả')));
+  return h('section', { class: 'panel today-card' },
+    h('div', { class: 'sec-head' },
+      h('h3', { class: 'sec-title' }, 'Lịch khám', active.length ? h('span', { class: 'counter' }, `đã ghi ${done}/${active.length}`) : null),
+      h('button', { class: 'small', onclick: () => go('walkin') }, icon('plus', 16), 'Khám không hẹn')),
+    active.length ? h('div', { class: 'progress', role: 'progressbar', 'aria-valuenow': pct }, h('i', { style: `width:${pct}%` })) : null,
+    h('div', { class: 'list' }, rows.length || walk.length ? [...rows, ...walk]
+      : [h('div', { class: 'empty' }, 'Hôm nay chưa có lịch hẹn. Bệnh nhân đến không hẹn: bấm "Khám không hẹn".')]));
 }
 
 /** Walk-in: pick (or create) the patient, then open a new visit. */
 function pageWalkIn() {
-  mount(h('div', { class: 'row-actions' }, h('button', { onclick: () => go('') }, '← Tổng quan')),
-    h('section', { class: 'card' }, h('h2', {}, 'Ghi lần khám (không có lịch hẹn)'),
-      h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Chọn bệnh nhân để ghi kết quả khám và tải ảnh.'),
+  mount(pageHead('Khám không hẹn', { back: () => go(''), sub: 'Chọn bệnh nhân để ghi kết quả khám và tải ảnh' }),
+    h('section', { class: 'panel' },
       patientPicker(null, p => { if (p) go('p/' + p.patient_id + '/v/new'); }),
-      h('div', { class: 'row-actions', style: 'margin-top:10px' }, h('button', { onclick: () => go('p/new') }, '+ Bệnh nhân mới'))));
+      h('div', { class: 'row-actions', style: 'margin-top:12px' }, h('button', { onclick: () => go('p/new') }, icon('plus', 18), 'Bệnh nhân mới'))));
 }
 
 async function pageDashboard() {
-  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Tìm bệnh nhân: tên, mã, SĐT, CCCD…', autocomplete: 'off',
+  const now = new Date();
+  const search = h('input', { type: 'search', class: 'search', placeholder: 'Tìm bệnh nhân: tên, mã, SĐT, CCCD', autocomplete: 'off', 'aria-label': 'Tìm bệnh nhân',
     onkeydown: e => { if (e.key === 'Enter') { pendingQuery = search.value; go('patients'); } } });
   const quota = h('div', { class: 'quota' });
-  const shell = h('div', {}, h('div', { class: 'loading' }, 'Đang tải tổng quan…'));
+  const shell = h('div', {}, h('div', { class: 'loading' }, 'Đang tải…'));
   mount(
-    h('section', { class: 'card' }, search,
-      h('div', { class: 'row-actions', style: 'margin:0' },
-        h('button', { class: 'primary', onclick: () => go('p/new') }, '+ Bệnh nhân'),
-        h('button', { onclick: () => newAppointment() }, '+ Lịch hẹn'),
-        h('button', { onclick: () => openCalendar() }, 'Lịch hẹn'),
-        h('button', { onclick: () => go('import') }, 'Nhập dữ liệu cũ'))),
+    pageHead('Hôm nay', { sub: `${WD_LONG[now.getDay()]}, ${fmtDate(todayStr())}` }),
+    h('div', { class: 'search-bar' }, icon('search', 20), search),
     shell, quota);
 
   let d;
   try { d = await api('getDashboard'); } catch (e) { return shell.replaceChildren(errBox(e, pageDashboard)); }
   const s = d.stats;
-  const [y, m, dd] = d.today.split('-');
-  const listOrEmpty = (items, empty) => items.length ? items : [h('div', { class: 'muted', style: 'padding:6px' }, empty)];
-  const nextDays = d.upcoming.filter(a => a.appt_date > d.today); // today is in the work list above
-
+  const list = (items, empty) => items.length ? items : [h('div', { class: 'empty' }, empty)];
+  const nextDays = d.upcoming.filter(a => a.appt_date > d.today); // today is in the work list
+  const next = nextPatientOf(d);
 
   shell.replaceChildren(
-    h('div', { class: 'dash-date' }, `Hôm nay ${dd}/${m}/${y}`),
-    h('div', { class: 'stats' },
-      statTile('Khám hôm nay', s.visitsToday, s.visitsToday ? 'lần khám' : 'chưa có'),
-      statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} hẹn trong 7 ngày`, () => openCalendar('day', d.today)),
-      statTile('Khám tháng này', s.visitsMonth, 'lần khám'),
-      statTile('Tổng bệnh nhân', s.patients, s.newPatientsMonth ? `+${s.newPatientsMonth} mới tháng này` : 'hồ sơ', () => go('patients'))),
-    todayCard(d),
-    h('div', { class: 'dash-grid' },
-      h('section', { class: 'card', id: 'dash-appt' },
-        h('div', { class: 'visit-head' }, h('h3', { style: 'margin:0' }, `Sắp tới — 7 ngày (${nextDays.length})`),
-          h('button', { onclick: () => openCalendar('week', d.today) }, 'Mở lịch')),
-        h('div', { class: 'list' }, listOrEmpty(nextDays.slice(0, 8).map(a => avRow(a, () => openCalendar('day', a.appt_date),
-          h('div', {}, h('span', { class: 'badge', style: 'margin:0 6px 0 0' }, dayLabel(a.appt_date, d.today)),
-            h('b', { class: 'tnum' }, a.start_time || '—'), ' ', h('b', {}, a.full_name)),
-          h('div', { class: 'muted' }, [a.start_time ? a.duration_min + ' phút' : 'chưa đặt giờ', a.title, phonesOf(a)[0]].filter(Boolean).join(' · ')))), 'Không có lịch hẹn')),
-        nextDays.length > 8 ? h('button', { class: 'link-btn', onclick: () => openCalendar('week', d.today) }, `Xem cả ${nextDays.length} lịch hẹn trên lịch →`) : null),
-
-      h('section', { class: 'card' }, h('h3', {}, 'Lần khám 6 tháng gần nhất'), monthChart(d.monthly, 'visits', String)),
-      h('section', { class: 'card' }, h('h3', {}, `Lỡ hẹn 30 ngày qua (${s.missed30})`),
-        h('div', { class: 'muted', style: 'margin-top:-4px' }, 'Bệnh nhân không đến — nên gọi hẹn lại'),
-        h('div', { class: 'list' }, listOrEmpty(d.missed.map(a => avRow(a, () => go('p/' + a.patient_id),
-          h('div', {}, h('b', {}, a.full_name), ' ', h('span', { class: 'muted' }, phonesOf(a).join(' · '))),
-          h('div', { class: 'muted' }, ['✗ ' + fmtDate(a.appt_date), a.start_time, a.title].filter(Boolean).join(' · ')))), 'Không có ai lỡ hẹn')),
-        s.missed30 > d.missed.length ? h('div', { class: 'muted' }, `Hiển thị 10/${s.missed30} gần nhất`) : null)));
+    h('div', { class: 'dash' },
+      h('div', { class: 'dash-main' },
+        next ? nextPatientHero(next)
+          : d.todayAppts.length ? h('section', { class: 'hero hero-done' }, icon('check', 28), h('div', {}, h('div', { class: 'hero-name' }, 'Đã ghi xong lịch hôm nay'), h('div', { class: 'hero-when' }, 'Bệnh nhân đến thêm: bấm "Khám không hẹn".')))
+          : null,
+        todayCard(d),
+        h('div', { class: 'stats' },
+          statTile('Khám hôm nay', s.visitsToday, null),
+          statTile('Hẹn hôm nay', s.apptToday, `${s.appt7} trong 7 ngày`, () => openCalendar('day', d.today)),
+          statTile('Khám tháng này', s.visitsMonth, null),
+          statTile('Tổng bệnh nhân', s.patients, s.newPatientsMonth ? `+${s.newPatientsMonth} mới tháng này` : null, () => go('patients')))),
+      h('div', { class: 'dash-side' },
+        h('section', { class: 'panel', id: 'dash-appt' },
+          h('div', { class: 'sec-head' }, h('h3', { class: 'sec-title' }, `Sắp tới — 7 ngày (${nextDays.length})`),
+            h('button', { class: 'small', onclick: () => openCalendar('week', d.today) }, icon('calendar', 16), 'Mở lịch')),
+          h('div', { class: 'list' }, list(nextDays.slice(0, 8).map(a => avRow(a, () => openCalendar('day', a.appt_date),
+            h('div', { class: 'row-title' }, h('span', { class: 'when-tag' }, dayLabel(a.appt_date, d.today), ' ', a.start_time || ''), h('b', {}, a.full_name)),
+            a.title ? h('div', { class: 'row-sub' }, a.title) : null)), 'Không có lịch hẹn trong 7 ngày tới')),
+          nextDays.length > 8 ? h('button', { class: 'link-btn', onclick: () => openCalendar('week', d.today) }, `Xem cả ${nextDays.length} lịch hẹn trên lịch`) : null),
+        h('section', { class: 'panel' }, h('h3', { class: 'sec-title' }, `Lỡ hẹn 30 ngày qua (${s.missed30})`),
+          h('div', { class: 'row-sub', style: 'margin:-2px 0 6px' }, 'Bệnh nhân không đến — nên gọi hẹn lại'),
+          h('div', { class: 'list' }, list(d.missed.map(a => h('div', { class: 'item row-av' }, avatar(a, 36),
+            h('div', { class: 'row-main', onclick: () => go('p/' + a.patient_id) }, h('div', { class: 'row-title' }, h('b', {}, a.full_name)),
+              facts(fmtDate(a.appt_date).slice(0, 5) + ' ' + (a.start_time || ''), a.title)),
+            phonesOf(a)[0] ? h('a', { class: 'icon-btn call', href: 'tel:' + phonesOf(a)[0].replace(/\s/g, ''), 'aria-label': 'Gọi ' + a.full_name }, icon('phone', 18)) : null)), 'Không có ai lỡ hẹn')),
+          s.missed30 > d.missed.length ? h('div', { class: 'row-sub' }, `Hiển thị 10/${s.missed30} gần nhất`) : null),
+        h('section', { class: 'panel' }, h('h3', { class: 'sec-title' }, 'Lần khám 6 tháng gần nhất'), monthChart(d.monthly, 'visits', String)))));
 
   api('getStorageQuota').then(q => {
     const pct = Math.round(q.ratio * 100);
     quota.className = 'quota' + (q.ratio > 0.8 ? ' warn' : '');
     quota.replaceChildren(`Dung lượng Drive: ${fmtSize(q.used)} / ${q.limit ? fmtSize(q.limit) : 'không giới hạn'} (${pct}%)`
       + (q.ratio > 0.8 ? ' — sắp đầy, cần dọn hoặc mua thêm dung lượng' : ''),
-      h('div', { class: 'bar' }, h('i', { style: `width:${Math.min(pct, 100)}%` })));
+      h('div', { class: 'progress' }, h('i', { style: `width:${Math.min(pct, 100)}%` })));
   }).catch(() => {});
 }
 
@@ -350,73 +471,76 @@ async function pagePatient(id, tab = 'history', labelFilter = '') {
   };
 
   function historyTab() {
-    if (!data.visits.length) return [h('div', { class: 'card muted' }, 'Chưa có lần khám — bấm "+ Lần khám".')];
+    if (!data.visits.length) return [h('div', { class: 'empty panel' }, 'Chưa có lần khám nào. Bấm "Ghi lần khám" để ghi lần đầu.')];
     return data.visits.map((v, idx) => {
       const grid = thumbGrid(v.images, reload);
-      const det = h('details', { class: 'card visit', open: idx === 0,
+      const det = h('details', { class: 'visit', open: idx === 0,
         ontoggle: () => { if (det.open && !det.dataset.loaded) { det.dataset.loaded = '1'; loadThumbs(v.images); } } },
         h('summary', {},
+          h('div', { class: 'visit-date' }, h('b', {}, fmtDate(v.visit_date).slice(0, 5)), h('span', {}, v.visit_date.slice(0, 4))),
           h('div', { class: 'visit-sum' },
-            h('b', {}, fmtDate(v.visit_date)), v.reason ? ' · ' + v.reason : '',
-            v.images.length ? h('span', { class: 'badge' }, '📷 ' + v.images.length) : null,
-            v.source !== 'app' ? h('span', { class: 'badge' }, 'Dữ liệu cũ') : null),
-          v.diagnosis ? h('div', { class: 'muted' }, v.diagnosis) : null),
+            h('div', { class: 'row-title' }, h('b', {}, v.diagnosis || v.reason || 'Lần khám'),
+              v.images.length ? h('span', { class: 'count-tag' }, icon('image', 14), v.images.length) : null,
+              v.source !== 'app' ? h('span', { class: 'count-tag' }, 'Dữ liệu cũ') : null),
+            v.treatment || v.reason ? h('div', { class: 'row-sub' }, v.treatment || v.reason) : null)),
         kv([['Chẩn đoán', v.diagnosis], ['Răng', v.teeth], ['Điều trị', v.treatment], ['Kế hoạch', v.plan],
           ['Đơn thuốc', v.prescription], ['Hẹn tái khám', v.appointment ? fmtDate(v.appointment.appt_date) + ' · ' + apptTimeText(v.appointment) : ''], ['Ghi chú', v.notes]]),
-        grid || h('div', { class: 'muted' }, 'Chưa có ảnh'),
-        h('div', { class: 'row-actions', style: 'margin-top:8px' }, h('button', { onclick: () => go('v/' + v.visit_id) }, 'Sửa / thêm ảnh')));
+        grid || h('div', { class: 'row-sub' }, 'Chưa có ảnh'),
+        h('div', { class: 'row-actions', style: 'margin-top:10px' }, h('button', { class: 'small', onclick: () => go('v/' + v.visit_id) }, icon('edit', 16), 'Sửa / thêm ảnh')));
       if (idx === 0) { det.dataset.loaded = '1'; setTimeout(() => loadThumbs(v.images)); }
       return det;
     });
   }
 
   function imagesTab() {
-    if (!allImages.length) return [h('div', { class: 'card muted' }, 'Chưa có ảnh nào. Thêm ảnh trong từng lần khám.')];
+    if (!allImages.length) return [h('div', { class: 'empty panel' }, 'Chưa có ảnh nào. Ảnh được thêm khi ghi từng lần khám.')];
     const count = k => allImages.filter(i => !k || i.label === k).length;
     const chips = h('div', { class: 'chips' }, [['', 'Tất cả'], ...Object.entries(LABELS)].map(([k, label]) =>
       count(k) ? h('button', { class: 'chip' + (filter === k ? ' active' : ''), onclick: () => { filter = k; show('images'); } }, `${label} (${count(k)})`) : null));
     const list = allImages.filter(i => !filter || i.label === filter); // lightbox swipes across all visits
     const groups = data.visits.map(v => ({ v, imgs: list.filter(i => i.visit_id === v.visit_id) })).filter(g => g.imgs.length);
-    const out = [chips, ...groups.map(g => h('section', { class: 'card' },
-      h('div', { class: 'visit-head' },
-        h('div', {}, h('b', {}, fmtDate(g.v.visit_date)), g.v.reason ? ' · ' + g.v.reason : '', h('span', { class: 'muted' }, ` (${g.imgs.length})`)),
-        h('button', { onclick: () => go('v/' + g.v.visit_id) }, 'Lần khám')),
+    const out = [chips, ...groups.map(g => h('section', { class: 'panel' },
+      h('div', { class: 'sec-head' },
+        h('div', { class: 'row-title' }, h('b', {}, fmtDate(g.v.visit_date)), h('span', { class: 'row-sub' }, [g.v.diagnosis || g.v.reason, g.imgs.length + ' ảnh'].filter(Boolean).join(', '))),
+        h('button', { class: 'small', onclick: () => go('v/' + g.v.visit_id) }, 'Lần khám')),
       thumbGrid(g.imgs, reload, list, list.indexOf(g.imgs[0]))))];
     setTimeout(() => loadThumbs(list));
     return out;
   }
 
   function infoTab() {
-    return [h('section', { class: 'card' },
+    return [h('section', { class: 'panel' },
       kv([['Mã BN', p.patient_id], ['Số CCCD', p.national_id], ['Ngày sinh', p.dob ? fmtDate(p.dob) : (p.birth_year || '')], ['Giới tính', p.gender],
         ['SĐT', phonesOf(p).join('\n')],
         ['Địa chỉ', p.address], ['Dị ứng', p.allergies], ['Bệnh toàn thân', p.systemic_diseases], ['Thuốc đang dùng', p.current_meds],
         ['Ghi chú', p.notes]]),
       h('div', { class: 'row-actions' },
-        h('button', { onclick: () => go('p/' + id + '/edit') }, 'Sửa thông tin'),
+        h('button', { onclick: () => go('p/' + id + '/edit') }, icon('edit', 16), 'Sửa thông tin'),
         h('button', { class: 'danger', onclick: async () => {
           if (!confirm(`Xoá hồ sơ ${p.full_name} (${p.patient_id})? Dữ liệu vẫn còn trong Google Sheet/Drive.`)) return;
           try { await api('deletePatient', id); toast('Đã xoá hồ sơ'); go('patients'); } catch (e) { toast(errMsg(e), 'error'); }
         } }, 'Xoá hồ sơ')))];
   }
 
+  const phone = phonesOf(p)[0];
   mount(
-    h('div', { class: 'row-actions' }, h('button', { onclick: () => go('patients') }, '← Danh sách')),
-    h('section', { class: 'card' },
-      h('div', { class: 'p-head' }, avatar(p, 72),
+    pageHead('Hồ sơ bệnh nhân', { back: () => go('patients'), actions: [h('button', { class: 'icon-btn', 'aria-label': 'Sửa thông tin', onclick: () => go('p/' + id + '/edit') }, icon('edit', 20))] }),
+    h('section', { class: 'p-card' },
+      h('div', { class: 'p-head' }, avatar(p, 76),
         h('div', { class: 'row-main' },
-          h('div', { class: 'visit-head' }, h('h2', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)),
-          h('div', { class: 'muted' }, [p.dob ? fmtDate(p.dob) : (p.birth_year ? 'Sinh ' + p.birth_year : ''), p.gender].filter(Boolean).join(' · ')),
-          p.national_id ? h('div', { class: 'muted' }, 'CCCD ' + p.national_id) : null,
-          phonesOf(p).length ? h('div', { class: 'muted' }, '☎ ' + phonesOf(p).join(' · ')) : null)),
-      p.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + p.allergies) : null,
-      p.systemic_diseases ? h('div', { class: 'muted' }, 'Bệnh toàn thân: ' + p.systemic_diseases) : null,
+          h('h2', { class: 'p-name' }, p.full_name),
+          facts(ageText(p), p.gender, p.patient_id),
+          facts(p.national_id ? 'CCCD ' + p.national_id : '', ...phonesOf(p)))),
+      medAlerts(p, true),
+      p.current_meds ? h('div', { class: 'med med-meds' }, icon('pill', 16), h('span', {}, h('b', {}, 'Đang dùng thuốc: '), p.current_meds)) : null,
       data.appointments.length ? h('div', { class: 'appt-line' }, data.appointments.slice(0, 3).map(a =>
-        h('button', { class: 'ev st-' + a.status + ' appt-chip', onclick: () => openCalendar('day', a.appt_date) },
-          '📅 ' + dayLabel(a.appt_date, todayStr()) + ' ' + (a.start_time ? a.start_time + ` (${a.duration_min}')` : '(chưa đặt giờ)') + (a.title ? ' · ' + a.title : '')))) : null,
-      h('div', { class: 'row-actions', style: 'margin:8px 0 0' },
-        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, '+ Lần khám'),
-        h('button', { onclick: () => newAppointment({ patient_id: id }) }, '+ Lịch hẹn'))),
+        h('button', { class: 'appt-chip st-' + a.status, onclick: () => openCalendar('day', a.appt_date) },
+          icon('calendar', 16), h('b', {}, dayLabel(a.appt_date, todayStr()) + ' ' + (a.start_time || '')),
+          h('span', {}, a.start_time ? `${a.duration_min} phút` : 'chưa đặt giờ'), a.title ? h('span', {}, a.title) : null))) : null,
+      h('div', { class: 'p-actions' },
+        h('button', { class: 'primary', onclick: () => go('p/' + id + '/v/new') }, icon('note', 18), 'Ghi lần khám'),
+        h('button', { onclick: () => newAppointment({ patient_id: id }) }, icon('calendar', 18), 'Đặt hẹn'),
+        phone ? h('a', { class: 'btn', href: 'tel:' + phone.replace(/\s/g, '') }, icon('phone', 18), 'Gọi') : null)),
     h('div', { class: 'tabs' }, tabDefs.map(([k, label]) => (tabBtns[k] = h('button', { class: 'tab', onclick: () => show(k) }, label)))),
     body);
   show(current);
@@ -500,8 +624,8 @@ function openLightbox(images, index, onChanged) {
       ontouchend: e => { if (touchX == null) return; const dx = e.changedTouches[0].clientX - touchX; if (Math.abs(dx) > 50) move(dx > 0 ? -1 : 1); touchX = null; } },
       img),
     status,
-    images.length > 1 ? h('button', { class: 'nav prev', onclick: () => move(-1) }, '‹') : null,
-    images.length > 1 ? h('button', { class: 'nav next', onclick: () => move(1) }, '›') : null);
+    images.length > 1 ? h('button', { class: 'lb-nav prev', onclick: () => move(-1) }, '‹') : null,
+    images.length > 1 ? h('button', { class: 'lb-nav next', onclick: () => move(1) }, '›') : null);
   document.body.append(box);
   document.addEventListener('keydown', onKey);
   show();
@@ -593,12 +717,14 @@ async function pagePatientForm(id) {
       dirty = false; toast('Đã lưu'); go('p/' + pid);
     } catch (e) { toast(errMsg(e), 'error'); save.disabled = false; save.textContent = 'Lưu'; }
   } }, 'Lưu');
-  mount(h('section', { class: 'card' }, h('h2', {}, id ? 'Sửa thông tin ' + p.patient_id : 'Bệnh nhân mới'),
-    h('div', { class: 'av-row' }, avBox,
-      h('div', {}, h('button', { type: 'button', onclick: () => avInput.click() }, p.avatar_id ? '📷 Đổi ảnh chân dung' : '📷 Chụp / chọn ảnh chân dung'),
-        h('div', { class: 'muted', style: 'margin-top:4px' }, 'Ảnh làm đại diện hồ sơ, tự thu nhỏ trước khi lưu')), avInput),
-    f.el,
-    h('div', { class: 'row-actions', style: 'margin-top:12px' }, save, h('button', { onclick: () => go(id ? 'p/' + id : 'patients') }, 'Huỷ'))));
+  const cancel = () => go(id ? 'p/' + id : 'patients');
+  mount(pageHead(id ? 'Sửa thông tin' : 'Bệnh nhân mới', { back: cancel, sub: id ? p.full_name + ', ' + p.patient_id : null }),
+    h('section', { class: 'panel' },
+      h('div', { class: 'av-row' }, avBox,
+        h('div', {}, h('button', { type: 'button', onclick: () => avInput.click() }, icon('camera', 18), p.avatar_id ? 'Đổi ảnh chân dung' : 'Chụp / chọn ảnh chân dung'),
+          h('div', { class: 'row-sub', style: 'margin-top:4px' }, 'Ảnh đại diện hồ sơ, tự thu nhỏ trước khi lưu')), avInput),
+      f.el),
+    h('div', { class: 'action-bar' }, save, h('button', { onclick: cancel }, 'Huỷ')));
   f.inputs.full_name.focus();
 }
 
@@ -635,8 +761,8 @@ async function pageVisitForm({ patientId, visitId }) {
   let apDur = ap.duration_min ? String(ap.duration_min) : '';
   const apDurPick = durationPicker(apDur, v => { apDur = v; dirty = true; });
   const apTitle = h('input', { value: ap.title || '', placeholder: 'Mặc định lấy theo "Kế hoạch tiếp"', oninput: () => { dirty = true; } });
-  const apSection = h('section', { class: 'card' }, h('h3', {}, 'Hẹn tái khám'),
-    ap.appt_id ? h('div', { class: 'muted' }, `Đã có lịch hẹn (${(APPT_STATUS[ap.status] || {}).label || ''}) — sửa ở đây hoặc trên Lịch hẹn.`) : null,
+  const apSection = h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Hẹn tái khám'),
+    ap.appt_id ? h('div', { class: 'row-sub' }, `Đã có lịch hẹn (${(APPT_STATUS[ap.status] || {}).label || ''}). Sửa ở đây hoặc trên Lịch hẹn.`) : null,
     h('div', { class: 'grid-form' },
       h('div', {}, h('label', {}, 'Ngày hẹn'), apDate), h('div', {}, h('label', {}, 'Giờ (để trống nếu chưa chốt)'), apTime),
       h('div', { class: 'full' }, h('label', {}, 'Thời lượng dự kiến'), apDurPick.el),
@@ -650,7 +776,7 @@ async function pageVisitForm({ patientId, visitId }) {
     },
   });
 
-  const title = h('h2', {}, visitId ? 'Sửa lần khám' : fromAppt ? 'Ghi kết quả khám' : 'Lần khám mới');
+  const title = h('h1', {}, visitId ? 'Sửa lần khám' : fromAppt ? 'Ghi kết quả khám' : 'Lần khám mới');
   const save = h('button', { class: 'primary', onclick: doSave }, 'Lưu');
   async function doSave() {
     const d = f.data();
@@ -679,15 +805,17 @@ async function pageVisitForm({ patientId, visitId }) {
   }
 
   mount(
-    h('div', { class: 'row-actions' }, h('button', { onclick: () => go('p/' + patientId) }, '← ' + patient.full_name)),
-    patient.allergies ? h('div', { class: 'alert' }, '⚠ Dị ứng: ' + patient.allergies) : null,
-    h('section', { class: 'card' }, title,
-      h('div', { class: 'row-av', style: 'margin-bottom:8px' }, avatar(patient, 40), h('div', { class: 'row-main' }, h('b', {}, patient.full_name), h('div', { class: 'muted' }, patient.patient_id))),
-      fromAppt ? h('div', { class: 'info' }, `📅 Theo lịch hẹn ${fmtDate(fromAppt.appt_date)} ${fromAppt.start_time || ''}${fromAppt.title ? ' · ' + fromAppt.title : ''} — lưu xong lịch hẹn tự chuyển "Đã đến".`) : null,
-      f.el),
-    h('section', { class: 'card' }, h('h3', {}, 'Ảnh chụp'), existing, uploader.el),
+    h('header', { class: 'ph' },
+      h('button', { class: 'icon-btn ph-back', 'aria-label': 'Quay lại', onclick: () => go('p/' + patientId) }, icon('back', 22)),
+      h('div', { class: 'ph-text' }, title)),
+    h('section', { class: 'p-card compact' },
+      h('div', { class: 'row-av' }, avatar(patient, 44), h('div', { class: 'row-main' }, h('b', { class: 'p-name sm' }, patient.full_name), facts(ageText(patient), patient.patient_id))),
+      medAlerts(patient)),
+    fromAppt ? h('div', { class: 'info' }, icon('calendar', 18), h('span', {}, `Theo lịch hẹn ${fmtDate(fromAppt.appt_date)} ${fromAppt.start_time || ''}${fromAppt.title ? ', ' + fromAppt.title : ''}. Lưu xong, lịch hẹn tự chuyển "Đã đến".`)) : null,
+    h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Kết quả khám'), f.el),
+    h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Ảnh chụp'), existing, uploader.el),
     apSection,
-    h('div', { class: 'row-actions' }, save, h('button', { onclick: () => go('p/' + patientId) }, 'Huỷ'),
+    h('div', { class: 'action-bar' }, save, h('button', { onclick: () => go('p/' + patientId) }, 'Huỷ'),
       visitId ? h('button', { class: 'danger', onclick: async () => {
         if (!confirm('Xoá lần khám này?')) return;
         try { await api('deleteVisit', visitId); toast('Đã xoá lần khám'); dirty = false; go('p/' + patientId); } catch (e) { toast(errMsg(e), 'error'); }
