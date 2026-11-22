@@ -1,7 +1,7 @@
 # Sổ bệnh án Nha khoa
 
 Web app (Google Apps Script) quản lý bệnh án nha khoa: hồ sơ bệnh nhân, nhật ký khám, ảnh gốc, tìm kiếm, nhập dữ liệu cũ.
-Dữ liệu nằm trong Google Drive của **tài khoản chủ app** (hiện là Gmail của Tuấn, gói 200 GB): `NhaKhoa/BenhAn` (Google Sheet) + `NhaKhoa/BenhNhan/<MãBN>_<Tên>/<ngày khám>/` (ảnh).
+Dữ liệu nằm trong Google Drive của bác sĩ: `NhaKhoa/BenhAn` (Google Sheet) + `NhaKhoa/BenhNhan/<MãBN>_<Tên>/<ngày khám>/` (ảnh).
 Tài liệu: `PRD.md`, `DESIGN.md` (trong Claude Project).
 
 ## Cấu trúc
@@ -21,35 +21,23 @@ test/                      lib.test.js · server.test.js (fake GAS) · ui.smoke.
 | `node tools/build-demo.js` | Trang xem thử `dist/demo.html` (dữ liệu giả) |
 | `python3 tools/build-template.py out.xlsx` | Tạo file Excel mẫu nhập dữ liệu cũ |
 
-## Cài đặt lần đầu (làm bằng **tài khoản Google chủ app** — hiện là Gmail của Tuấn)
-> App chạy "Execute as Me" + "Only myself" → chỉ đúng tài khoản chủ app mở được; script, Sheet và ảnh đều nằm trong Drive của tài khoản đó.
-> Điện thoại/máy của bác sĩ phải **đăng nhập tài khoản chủ app** để dùng (xem mục *Thiết bị của bác sĩ*).
+## Cài đặt lần đầu (làm bằng **tài khoản Gmail của bác sĩ**)
+> App chạy với quyền "Only myself" → chủ sở hữu script phải là chính bác sĩ, dữ liệu nằm trong Drive của bác sĩ.
 
-1. `npm i` → `npx clasp login` (đăng nhập tài khoản chủ app). Bật Apps Script API tại https://script.google.com/home/usersettings.
+1. `npm i` → `npx clasp login` (đăng nhập Gmail bác sĩ). Bật Apps Script API tại https://script.google.com/home/usersettings.
 2. `npx clasp create --type standalone --title "So benh an Nha khoa" --rootDir src` → `npx clasp push`.
 3. Mở https://script.google.com → project vừa tạo → chọn hàm `setup` → **Run** → cấp quyền.
    Google báo *"Google hasn't verified this app"* → **Advanced → Go to So benh an Nha khoa (unsafe)** (script của chính mình).
    Kết quả: thư mục `NhaKhoa` (BenhNhan, _import, _backup, _system) + Sheet `BenhAn` + trigger sao lưu Chủ nhật 22h.
 4. **Deploy → New deployment → Web app**: Execute as **Me**, Who has access **Only myself** → copy URL `/exec`.
-5. Điện thoại: mở URL trong Chrome/Safari (đã đăng nhập tài khoản chủ app) → *Thêm vào màn hình chính*.
-
-### Thiết bị của bác sĩ
-- Đăng nhập tài khoản chủ app trong trình duyệt của bác sĩ. Nên dùng **một Chrome profile riêng** (hoặc Safari chỉ đăng nhập tài khoản này):
-  Apps Script hay báo *"Sorry, unable to open the file at this time"* khi trình duyệt đăng nhập nhiều Google account cùng lúc mà tài khoản chủ app không phải account mặc định.
-- Bật khoá màn hình cho thiết bị; trình duyệt này có quyền vào toàn bộ Drive của tài khoản chủ app.
-
-### Chuyển sang tài khoản khác sau này (ví dụ Gmail của bác sĩ)
-1. Tài khoản cũ: chia sẻ thư mục `NhaKhoa` cho tài khoản mới rồi **chuyển quyền sở hữu** (Drive → Share → Transfer ownership; tài khoản mới chấp nhận) cho thư mục, Sheet `BenhAn` và toàn bộ ảnh. Cách này giữ nguyên ID file/thư mục mà Sheet đang tham chiếu. **Không** dùng Takeout/tải về rồi upload lại: ID đổi, app mất liên kết ảnh.
-2. Tài khoản mới: làm bước 1–2 ở trên, rồi trong Apps Script → Project Settings → **Script properties** thêm `ROOT_ID` (ID thư mục `NhaKhoa`) và `SHEET_ID` (ID Sheet `BenhAn`) **trước** khi chạy `setup` (nếu không, `setup` tạo thư mục mới trống). Sau đó chạy `setup`, deploy như bước 3–4.
-3. Đổi biến `APP_URL` trên GitHub sang link `/exec` mới → chạy lại workflow Pages. Link github.io giữ nguyên.
-
+5. Điện thoại: mở URL trong Chrome/Safari (đăng nhập Gmail bác sĩ) → *Thêm vào màn hình chính*.
 
 ### Cập nhật phiên bản
 `npx clasp push` → script.google.com → **Deploy → Manage deployments → ✏️ → Version: New version → Deploy** (giữ nguyên URL).
 Rollback: chọn lại version cũ ở bước này.
 
 ## GitHub (repo public) + link `https://<tài-khoản>.github.io/<repo>/`
-Repo public **chỉ chứa mã nguồn** — dữ liệu bệnh nhân nằm trong Drive/Sheet của tài khoản chủ app, không bao giờ vào repo
+Repo public **chỉ chứa mã nguồn** — dữ liệu bệnh nhân nằm trong Drive/Sheet của bác sĩ, không bao giờ vào repo
 (`.gitignore` chặn `*.xlsx`, `.clasp.json`, `.clasprc.json`). App vẫn chạy trên Apps Script với quyền "Only myself";
 trang github.io chỉ là **lối vào**: mở ra sẽ chuyển sang link `script.google.com/.../exec` của app.
 
@@ -68,10 +56,10 @@ trang github.io chỉ là **lối vào**: mở ra sẽ chuyển sang link `scrip
 Trang lối vào có `noindex` (Google không lập chỉ mục), chỉ chấp nhận link dạng `https://script.google.com/macros/s/…/exec`.
 
 ### (Tuỳ chọn) Tự deploy Apps Script khi push
-Mặc định **tắt**. Bật bằng cách thêm: secret `CLASPRC_JSON` (nội dung `~/.clasprc.json` sau `npx clasp login` bằng tài khoản chủ app),
+Mặc định **tắt**. Bật bằng cách thêm: secret `CLASPRC_JSON` (nội dung `~/.clasprc.json` sau `npx clasp login` bằng Gmail bác sĩ),
 variables `SCRIPT_ID` (trong `.clasp.json`) và `DEPLOYMENT_ID` (Manage deployments → Deployment ID).
 Workflow sẽ `clasp push` + `clasp deploy -i <DEPLOYMENT_ID>` (giữ nguyên link).
-**Lưu ý bảo mật:** secret này là phiên đăng nhập Google của tài khoản chủ app (cả Gmail/Drive cá nhân); ai có quyền admin repo đều có thể dùng nó.
+**Lưu ý bảo mật:** secret này là phiên đăng nhập Google của bác sĩ; ai có quyền admin repo đều có thể dùng nó.
 Nên thêm *required reviewer* cho environment `apps-script` (Settings → Environments), hoặc không bật và deploy thủ công từ máy mình.
 
 ## Kiểm tra sau cài đặt (bắt buộc, theo DESIGN §1 rủi ro CORS)
