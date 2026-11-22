@@ -16,8 +16,10 @@ test/                      lib.test.js · server.test.js (fake GAS) · ui.smoke.
 | Lệnh | Việc |
 |---|---|
 | `npm test` | Unit + integration (server trên fake GAS), không cần cài gì (Node ≥ 18) |
-| `npm i && npm run test:ui` | UI smoke test (jsdom) |
+| `npm ci && npm run test:ui` | UI smoke test (jsdom) |
 | `npx clasp push` | Đẩy code lên Apps Script |
+| `node tools/build-demo.js` | Trang xem thử `dist/demo.html` (dữ liệu giả) |
+| `python3 tools/build-template.py out.xlsx` | Tạo file Excel mẫu nhập dữ liệu cũ |
 
 ## Cài đặt lần đầu (làm bằng **tài khoản Gmail của bác sĩ**)
 > App chạy với quyền "Only myself" → chủ sở hữu script phải là chính bác sĩ, dữ liệu nằm trong Drive của bác sĩ.
@@ -33,6 +35,32 @@ test/                      lib.test.js · server.test.js (fake GAS) · ui.smoke.
 ### Cập nhật phiên bản
 `npx clasp push` → script.google.com → **Deploy → Manage deployments → ✏️ → Version: New version → Deploy** (giữ nguyên URL).
 Rollback: chọn lại version cũ ở bước này.
+
+## GitHub (repo public) + link `https://<tài-khoản>.github.io/<repo>/`
+Repo public **chỉ chứa mã nguồn** — dữ liệu bệnh nhân nằm trong Drive/Sheet của bác sĩ, không bao giờ vào repo
+(`.gitignore` chặn `*.xlsx`, `.clasp.json`, `.clasprc.json`). App vẫn chạy trên Apps Script với quyền "Only myself";
+trang github.io chỉ là **lối vào**: mở ra sẽ chuyển sang link `script.google.com/.../exec` của app.
+
+1. Tạo repo **public** trên GitHub (ví dụ `nhakhoa`), rồi trong thư mục này:
+   ```bash
+   git remote add origin https://github.com/<tài-khoản>/nhakhoa.git
+   git push -u origin main
+   ```
+2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
+3. **Settings → Secrets and variables → Actions → Variables → New variable**: `APP_URL` = link `/exec` của web app
+   (Apps Script → Deploy → Manage deployments → Web app URL).
+4. **Actions → Pages → Run workflow** (lần đầu; sau đó tự chạy khi sửa `site/`).
+   Link: `https://<tài-khoản>.github.io/nhakhoa/` → trên điện thoại mở link này → *Thêm vào màn hình chính*.
+5. Workflow **CI** tự chạy test mỗi lần push.
+
+Trang lối vào có `noindex` (Google không lập chỉ mục), chỉ chấp nhận link dạng `https://script.google.com/macros/s/…/exec`.
+
+### (Tuỳ chọn) Tự deploy Apps Script khi push
+Mặc định **tắt**. Bật bằng cách thêm: secret `CLASPRC_JSON` (nội dung `~/.clasprc.json` sau `npx clasp login` bằng Gmail bác sĩ),
+variables `SCRIPT_ID` (trong `.clasp.json`) và `DEPLOYMENT_ID` (Manage deployments → Deployment ID).
+Workflow sẽ `clasp push` + `clasp deploy -i <DEPLOYMENT_ID>` (giữ nguyên link).
+**Lưu ý bảo mật:** secret này là phiên đăng nhập Google của bác sĩ; ai có quyền admin repo đều có thể dùng nó.
+Nên thêm *required reviewer* cho environment `apps-script` (Settings → Environments), hoặc không bật và deploy thủ công từ máy mình.
 
 ## Kiểm tra sau cài đặt (bắt buộc, theo DESIGN §1 rủi ro CORS)
 1. Tạo 1 bệnh nhân thử → thêm lần khám → chọn 2–3 ảnh từ điện thoại → Lưu.

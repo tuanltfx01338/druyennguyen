@@ -1,0 +1,42 @@
+# Publishes site/ (a launcher page that forwards to the Apps Script web app) to GitHub Pages.
+# Set the repository variable APP_URL = https://script.google.com/macros/s/<id>/exec
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inject app link
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          if ! echo "$APP_URL" | grep -Eq '^https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec$'; then
+            echo "::warning::APP_URL chưa đặt hoặc sai dạng — trang sẽ báo 'Chưa cấu hình link app'."
+            APP_URL=""
+          fi
+          sed -i "s#__APP_URL__#${APP_URL}#" site/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

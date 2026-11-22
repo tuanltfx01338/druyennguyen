@@ -1,0 +1,56 @@
+# OPTIONAL: push src/ to Apps Script and update the existing web-app deployment (same /exec URL).
+# Runs only when the secret CLASPRC_JSON exists. That secret is a Google login of the doctor's account
+# (content of ~/.clasprc.json after `npx clasp login`) — anyone with admin rights on this repo could use it.
+# Safer default: leave it unset and deploy from your own computer with `npx clasp push` (see README).
+name: Deploy Apps Script
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['src/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apps-script
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: apps-script   # add required reviewers in Settings → Environments to approve each deploy
+    env:
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      SCRIPT_ID: ${{ vars.SCRIPT_ID }}
+      DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+    steps:
+      - id: check
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$SCRIPT_ID" ] || [ -z "$DEPLOYMENT_ID" ]; then
+            echo "Deploy tự động chưa bật (thiếu CLASPRC_JSON / SCRIPT_ID / DEPLOYMENT_ID) — bỏ qua."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.check.outputs.skip != '1'
+        uses: actions/checkout@v4
+      - if: steps.check.outputs.skip != '1'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - if: steps.check.outputs.skip != '1'
+        run: npm ci && npm test
+      - if: steps.check.outputs.skip != '1'
+        name: Write clasp credentials (never committed)
+        run: |
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          printf '{"scriptId":"%s","rootDir":"src"}' "$SCRIPT_ID" > .clasp.json
+      - if: steps.check.outputs.skip != '1'
+        name: Push code and redeploy the same web-app URL
+        run: |
+          npx clasp push -f
+          npx clasp deploy -i "$DEPLOYMENT_ID" -d "github ${GITHUB_SHA::7}"
+      - if: always()
+        run: rm -f ~/.clasprc.json .clasp.json
