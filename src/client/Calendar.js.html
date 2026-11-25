@@ -26,7 +26,8 @@ const fmtDayLong = s => { const d = toDate(s); return `${WD_LONG[d.getDay()]}, $
 const shortName = n => String(n).trim().split(/\s+/).slice(-2).join(' ');
 const apptTimeText = a => a.start_time ? `${a.start_time}–${endTimeOf(a)} (${a.duration_min}')` : 'Chưa đặt giờ';
 
-const calState = { view: window.innerWidth < 600 ? 'day' : 'week', date: todayStr(), scroll: null };
+// Month first: the doctor scans the whole month, then taps a day to see its hours.
+const calState = { view: 'month', date: todayStr(), scroll: null };
 let pendingAppt = null; // prefill for the appointment form
 let pendingVisit = null; // { fromAppt } when recording an appointment's result
 
