@@ -2,7 +2,7 @@
   "name": "Sổ bệnh án Nha khoa",
   "short_name": "Bệnh án",
   "start_url": "./",
-  "display": "standalone",
+  "display": "browser",
   "background_color": "#0F1E3D",
   "theme_color": "#0F1E3D",
   "icons": [
