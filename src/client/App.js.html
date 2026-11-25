@@ -108,8 +108,19 @@ function medAlerts(p, big = false) {
   const out = [];
   if (p.allergies) out.push(h('div', { class: 'med med-allergy' + (big ? ' big' : '') }, icon('alert', big ? 20 : 16), h('span', {}, h('b', {}, 'Dị ứng: '), p.allergies)));
   if (p.systemic_diseases) out.push(h('div', { class: 'med med-sys' + (big ? ' big' : '') }, icon('heart', big ? 20 : 16), h('span', {}, h('b', {}, 'Bệnh nền: '), p.systemic_diseases)));
+  if (isPending(p)) out.push(pendingNote(p, big));
   return out.length ? h('div', { class: 'meds' }, out) : null;
 }
+
+/** Booking placeholder (name + phone only): the doctor completes it when the patient arrives. */
+const isPending = p => !!(p && String(p.info_pending || '') === '1');
+const PENDING_TEXT = 'Hồ sơ tạm — tạo khi đặt hẹn, cần bổ sung thông tin khi bệnh nhân tới khám.';
+function pendingNote(p, big = false) {
+  return h('div', { class: 'med med-pending' + (big ? ' big' : '') }, icon('edit', big ? 20 : 16),
+    h('span', {}, PENDING_TEXT),
+    p.patient_id ? h('button', { type: 'button', class: 'link-btn', onclick: e => { e.stopPropagation(); go('p/' + p.patient_id + '/edit'); } }, 'Bổ sung') : null);
+}
+const pendingBadge = p => isPending(p) ? h('span', { class: 'badge amber' }, 'Hồ sơ tạm') : null;
 
 /** Page header: optional back button, title, subtitle, trailing actions. */
 function pageHead(title, { sub, back, actions } = {}) {
@@ -219,7 +230,7 @@ function patientRow(p) {
   return h('a', { href: '#', class: 'item row-av', onclick: e => { e.preventDefault(); go('p/' + p.patient_id); } },
     avatar(p, 44),
     h('div', { class: 'row-main' },
-      h('div', { class: 'row-title' }, h('b', {}, p.full_name), p.allergies ? h('span', { class: 'dot-alert', title: 'Dị ứng: ' + p.allergies }, icon('alert', 14), 'Dị ứng') : null),
+      h('div', { class: 'row-title' }, h('b', {}, p.full_name), pendingBadge(p), p.allergies ? h('span', { class: 'dot-alert', title: 'Dị ứng: ' + p.allergies }, icon('alert', 14), 'Dị ứng') : null),
       facts(p.patient_id, ageText(p), phonesOf(p)[0], p.national_id ? 'CCCD ' + p.national_id : '')),
     icon('next', 18));
 }
@@ -722,6 +733,7 @@ async function pagePatientForm(id) {
   } }, 'Lưu');
   const cancel = () => go(id ? 'p/' + id : 'patients');
   mount(pageHead(id ? 'Sửa thông tin' : 'Bệnh nhân mới', { back: cancel, sub: id ? p.full_name + ', ' + p.patient_id : null }),
+    isPending(p) ? h('div', { class: 'med med-pending big' }, icon('edit', 20), h('span', {}, 'Hồ sơ tạo nhanh khi đặt hẹn. Bổ sung ngày sinh, giới tính, CCCD, dị ứng, bệnh nền… rồi bấm Lưu — hồ sơ sẽ hết là hồ sơ tạm.')) : null,
     h('section', { class: 'panel' },
       h('div', { class: 'av-row' }, avBox,
         h('div', {}, h('button', { type: 'button', onclick: () => avInput.click() }, icon('camera', 18), p.avatar_id ? 'Đổi ảnh chân dung' : 'Chụp / chọn ảnh chân dung'),

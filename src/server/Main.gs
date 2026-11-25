@@ -1,5 +1,7 @@
 function doGet() {
-  if (!PropertiesService.getScriptProperties().getProperty('SHEET_ID')) setup();
+  var props = PropertiesService.getScriptProperties();
+  // Re-run the idempotent setup after an update that adds columns, so headers/formats exist without a manual step.
+  if (!props.getProperty('SHEET_ID') || props.getProperty('SCHEMA_VERSION') !== String(SCHEMA_VERSION)) setup();
   return HtmlService.createTemplateFromFile('client/Index').evaluate()
     .setTitle('Sổ bệnh án Nha khoa')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -40,6 +42,14 @@ function setup() {
     if (sh.getLastRow() === 0) {
       sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
       sh.setFrozenRows(1);
+    } else {
+      // Columns are only ever appended: fill in header cells for new trailing columns.
+      var head = sh.getRange(1, 1, 1, cols.length).getValues()[0];
+      var missing = cols.filter(function (c, i) { return head[i] !== c; });
+      if (missing.length) {
+        cols.forEach(function (c, i) { if (head[i] !== '' && head[i] != null && head[i] !== c) throw new Error('Sheet ' + name + ' cột ' + (i + 1) + ' là "' + head[i] + '", cần "' + c + '"'); });
+        sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
+      }
     }
     // Text format keeps leading zeros in phone numbers and stops Sheets auto-parsing timestamps.
     cols.forEach(function (c, i) {
@@ -54,7 +64,8 @@ function setup() {
 
   props.setProperties({
     ROOT_ID: root.getId(), SHEET_ID: ss.getId(), PATIENTS_FOLDER_ID: patients.getId(),
-    IMPORT_FOLDER_ID: imp.getId(), BACKUP_FOLDER_ID: backup.getId(), SYSTEM_FOLDER_ID: system.getId()
+    IMPORT_FOLDER_ID: imp.getId(), BACKUP_FOLDER_ID: backup.getId(), SYSTEM_FOLDER_ID: system.getId(),
+    SCHEMA_VERSION: String(SCHEMA_VERSION)
   });
 
   var hasTrigger = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'weeklyBackup'; });

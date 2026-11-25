@@ -5,7 +5,9 @@
 var TABLES = {
   Patients: ['patient_id', 'full_name', 'name_search', 'national_id', 'dob', 'birth_year', 'gender', 'phone', 'address',
     'allergies', 'systemic_diseases', 'current_meds', 'notes', 'avatar_id', 'folder_id', 'import_stt', 'import_folder_name',
-    'created_at', 'updated_at', 'deleted'],
+    'created_at', 'updated_at', 'deleted',
+    // '1' = hồ sơ tạm tạo khi đặt hẹn (chỉ tên + SĐT), cần bổ sung khi bệnh nhân tới khám. New columns go at the end.
+    'info_pending'],
   Visits: ['visit_id', 'patient_id', 'visit_date', 'reason', 'diagnosis', 'teeth', 'treatment', 'plan',
     'prescription', 'notes', 'folder_id', 'source',
     'created_at', 'updated_at', 'deleted'],
@@ -16,6 +18,8 @@ var TABLES = {
   Counters: ['year', 'last_seq'],
   ImportLog: ['run_id', 'at', 'sheet', 'row', 'status', 'message']
 };
+// Bump when TABLES gains columns; doGet then re-runs setup() once to write the new headers.
+var SCHEMA_VERSION = 2;
 var DATE_COLS = { Patients: ['dob'], Visits: ['visit_date'], Appointments: ['appt_date'] };
 var NUMBER_COLS = {
   Patients: ['birth_year', 'import_stt'], Images: ['size_bytes'], Appointments: ['duration_min'],
@@ -263,6 +267,28 @@ function normalizeTime(v) {
   return isValidTime(t) ? t : null;
 }
 
+/** Bệnh nhân mới tạo nhanh khi đặt hẹn: chỉ cần họ tên + SĐT, phần còn lại bổ sung khi tới khám. */
+function validateQuickPatient(d) {
+  var e = [];
+  var v = { full_name: text_(d, 'full_name', e, 'Họ tên'), phone: normalizePhones(d.phone) };
+  if (!v.full_name) e.push('Thiếu họ tên bệnh nhân mới');
+  if (!v.phone) e.push('Thiếu số điện thoại bệnh nhân mới (dùng để tránh tạo trùng hồ sơ)');
+  return { errors: e, value: v };
+}
+
+/** First active patient sharing any phone number with `phones` (digits compared, spaces/dots ignored). */
+function findPatientByPhone(patients, phones) {
+  var digits = function (s) { return String(s || '').split(/[,;\/\n]+/).map(function (x) { return x.replace(/\D/g, ''); }).filter(Boolean); };
+  var want = digits(phones);
+  if (!want.length) return null;
+  for (var i = 0; i < patients.length; i++) {
+    var p = patients[i];
+    if (isTrue(p.deleted)) continue;
+    if (digits(p.phone).some(function (x) { return want.indexOf(x) >= 0; })) return p;
+  }
+  return null;
+}
+
 function validateAppointment(d) {
   var e = [];
   var v = {
@@ -331,7 +357,7 @@ function buildDashboard(patients, visits, today, appointments) {
   });
   var pub = function (a) {
     var p = byId[a.patient_id], lv = lastVisit[a.patient_id];
-    return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: p.full_name, phone: p.phone, avatar_id: p.avatar_id,
+    return { appt_id: a.appt_id, patient_id: a.patient_id, full_name: p.full_name, phone: p.phone, avatar_id: p.avatar_id, info_pending: p.info_pending || '',
       allergies: p.allergies, systemic_diseases: p.systemic_diseases, gender: p.gender, dob: p.dob, birth_year: p.birth_year,
       appt_date: a.appt_date, start_time: a.start_time, duration_min: a.duration_min, title: a.title, notes: a.notes,
       status: a.status, result_visit_id: a.result_visit_id || '',

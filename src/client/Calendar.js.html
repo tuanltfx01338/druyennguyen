@@ -380,23 +380,57 @@ function durationPicker(value, onChange) {
   return { el: h('div', { class: 'chips', style: 'align-items:center;margin:0' }, chips, input, h('span', { class: 'muted' }, 'phút')), input };
 }
 
-function patientPicker(initial, onPick) {
+/**
+ * Pick an existing patient, or (booking only) enter name + phone for someone not in the database yet.
+ * onPick receives a patient, { isNew: true, full_name, phone }, or null.
+ */
+function patientPicker(initial, onPick, { allowNew = false } = {}) {
   const box = h('div');
   const showSelected = p => box.replaceChildren(h('div', { class: 'picked' },
-    h('div', { class: 'row-av' }, avatar(p, 44), h('div', { class: 'row-main' }, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id),
+    h('div', { class: 'row-av' }, avatar(p, 44), h('div', { class: 'row-main' }, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id), pendingBadge(p),
       phonesOf(p).length ? h('div', { class: 'muted' }, phonesOf(p).join(' · ')) : null)),
     h('button', { type: 'button', onclick: () => { onPick(null); showSearch(); } }, 'Đổi')),
     ...(medAlerts(p) ? [medAlerts(p)] : []));
+  const choose = p => { onPick(p); showSelected(p); };
+  const showNew = query => {
+    const digitsOnly = /^[\d\s.+-]+$/.test(query);
+    const name = h('input', { value: digitsOnly ? '' : query, placeholder: 'Họ tên', autocomplete: 'off' });
+    const phone = h('input', { type: 'tel', value: digitsOnly ? query : '', placeholder: 'Số điện thoại', autocomplete: 'off' });
+    const match = h('div');
+    const emit = () => onPick({ isNew: true, full_name: name.value.trim(), phone: phone.value.trim() });
+    let t;
+    const checkPhone = () => { clearTimeout(t); match.replaceChildren(); emit(); t = setTimeout(async () => {
+      if (phone.value.replace(/\D/g, '').length < 9) return;
+      try {
+        const list = await api('searchPatients', phone.value);
+        if (list.length) match.replaceChildren(h('div', { class: 'med med-sys' }, icon('alert', 16),
+          h('span', {}, 'SĐT này đã có hồ sơ ', h('b', {}, list[0].full_name), ' (' + list[0].patient_id + ').'),
+          h('button', { type: 'button', class: 'link-btn', onclick: () => choose(list[0]) }, 'Dùng hồ sơ này')));
+      } catch (e) { console.warn('phone check failed', e); }
+    }, 300); };
+    name.addEventListener('input', emit);
+    phone.addEventListener('input', checkPhone);
+    box.replaceChildren(h('div', { class: 'new-pt' },
+      h('b', {}, 'Bệnh nhân mới (chưa có hồ sơ)'),
+      name, phone, match,
+      h('div', { class: 'hint' }, 'Lưu lịch hẹn sẽ tạo hồ sơ tạm với tên + SĐT. Nếu SĐT trùng hồ sơ có sẵn, app dùng hồ sơ đó, không tạo mới.'),
+      h('button', { type: 'button', class: 'link-btn', onclick: () => { onPick(null); showSearch(); } }, '‹ Tìm bệnh nhân có sẵn')));
+    emit(); checkPhone();
+    (name.value ? phone : name).focus();
+  };
   const showSearch = () => {
     const q = h('input', { type: 'search', placeholder: 'Gõ tên, mã, SĐT hoặc CCCD…', autocomplete: 'off' });
     const res = h('div', { class: 'list' });
+    const newBtn = () => allowNew ? h('button', { type: 'button', class: 'link-btn', onclick: () => showNew(q.value.trim()) }, icon('plus', 16), ' Bệnh nhân mới: ', h('b', {}, q.value.trim())) : null;
     let t;
     q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => {
       if (!q.value.trim()) return res.replaceChildren();
       try {
         const list = await api('searchPatients', q.value);
-        res.replaceChildren(...(list.length ? list.slice(0, 8).map(p => avRow(p, () => { onPick(p); showSelected(p); },
-          h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id)), h('div', { class: 'muted' }, [phonesOf(p)[0], p.national_id ? 'CCCD ' + p.national_id : ''].filter(Boolean).join(' · ')))) : [h('div', { class: 'muted' }, 'Không tìm thấy — tạo bệnh nhân mới trước')]));
+        res.replaceChildren(...list.slice(0, 8).map(p => avRow(p, () => choose(p),
+          h('div', {}, h('b', {}, p.full_name), h('span', { class: 'badge' }, p.patient_id), pendingBadge(p)), h('div', { class: 'muted' }, [phonesOf(p)[0], p.national_id ? 'CCCD ' + p.national_id : ''].filter(Boolean).join(' · ')))),
+          list.length ? null : h('div', { class: 'muted' }, allowNew ? 'Chưa có trong danh sách.' : 'Không tìm thấy — tạo bệnh nhân mới trước'),
+          newBtn());
       } catch (e) { res.replaceChildren(errBox(e)); }
     }, 250); });
     box.replaceChildren(q, res);
@@ -419,7 +453,12 @@ async function pageAppointmentForm(id) {
   }
   if (!a.appt_date) a.appt_date = todayStr();
   let patientId = patient ? patient.patient_id : '';
-  const picker = patientPicker(patient, p => { patientId = p ? p.patient_id : ''; dirty = true; });
+  let newPatient = null;
+  const picker = patientPicker(patient, p => {
+    newPatient = p && p.isNew ? p : null;
+    patientId = p && !p.isNew ? p.patient_id : '';
+    dirty = true;
+  }, { allowNew: true });
   const date = h('input', { type: 'date', value: a.appt_date, oninput: () => { dirty = true; } });
   const time = h('input', { type: 'time', value: a.start_time || '', step: 300, min: '06:00', max: '21:00', oninput: () => { dirty = true; updEnd(); } });
   const endInfo = h('span', { class: 'muted' });
@@ -433,14 +472,19 @@ async function pageAppointmentForm(id) {
   const field = (label, el, full) => h('div', { class: full ? 'full' : '' }, h('label', {}, label), el);
   const back = () => { calState.date = date.value || calState.date; go('calendar'); };
   const save = h('button', { class: 'primary', onclick: async () => {
-    if (!patientId) return toast('Chưa chọn bệnh nhân', 'warn');
+    if (!patientId && !newPatient) return toast('Chọn bệnh nhân, hoặc bấm "Bệnh nhân mới" để nhập tên + SĐT', 'warn');
+    if (newPatient && !newPatient.full_name) return toast('Nhập họ tên bệnh nhân mới', 'warn');
+    if (newPatient && newPatient.phone.replace(/\D/g, '').length < 9) return toast('Nhập số điện thoại bệnh nhân mới', 'warn');
     if (time.value && !duration) return toast('Nhập thời lượng dự kiến', 'warn');
     save.disabled = true;
     try {
-      const r = await api('saveAppointment', { appt_id: id || '', patient_id: patientId, appt_date: date.value, start_time: time.value,
+      const r = await api('saveAppointment', { appt_id: id || '', patient_id: patientId,
+        new_patient: newPatient ? { full_name: newPatient.full_name, phone: newPatient.phone } : null, appt_date: date.value, start_time: time.value,
         duration_min: time.value ? duration : (duration || ''), title: title.value, notes: notes.value, status: id ? status.value : 'scheduled', visit_id: a.visit_id || '' });
       dirty = false;
-      if (r.conflicts.length) toast('Đã lưu · Trùng giờ với: ' + r.conflicts.join(', '), 'warn'); else toast('Đã lưu lịch hẹn');
+      const who = r.created_patient ? ' · Tạo hồ sơ tạm ' + r.created_patient.patient_id
+        : r.reused_patient ? ' · Dùng hồ sơ có sẵn ' + r.reused_patient.full_name + ' (' + r.reused_patient.patient_id + ')' : '';
+      if (r.conflicts.length) toast('Đã lưu' + who + ' · Trùng giờ với: ' + r.conflicts.join(', '), 'warn'); else toast('Đã lưu lịch hẹn' + who);
       back();
     } catch (e) { toast(errMsg(e), 'error'); save.disabled = false; }
   } }, 'Lưu');

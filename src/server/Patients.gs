@@ -28,7 +28,7 @@ function searchPatients(q) {
     }
     return res.map(function (p) {
       return { patient_id: p.patient_id, full_name: p.full_name, birth_year: p.birth_year, phone: p.phone, allergies: p.allergies,
-        national_id: p.national_id, avatar_id: p.avatar_id, dob: p.dob, gender: p.gender };
+        national_id: p.national_id, avatar_id: p.avatar_id, dob: p.dob, gender: p.gender, info_pending: p.info_pending || '' };
     });
   });
 }
@@ -68,6 +68,8 @@ function savePatient(data) {
       if (data.patient_id) {
         var p = mustFindActive_('Patients', 'patient_id', data.patient_id, 'Bệnh nhân');
         Object.keys(v).forEach(function (k) { p[k] = v[k]; });
+        // Saving the full form means the doctor has reviewed the record: a booking placeholder is now complete.
+        p.info_pending = '';
         p.updated_at = now_();
         updateRow_('Patients', p);
         return p.patient_id;
@@ -81,6 +83,20 @@ function savePatient(data) {
       return newId;
     });
   });
+}
+
+/** Placeholder patient from the booking form (caller holds the lock). */
+function createQuickPatient_(v) {
+  var p = {
+    patient_id: reserveIds_(new Date().getFullYear(), 1)[0],
+    full_name: v.full_name, name_search: normalizeText(v.full_name), phone: v.phone,
+    notes: 'Tạo nhanh khi đặt hẹn ' + Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'dd/MM/yyyy') + ' — bổ sung thông tin khi bệnh nhân tới khám.',
+    info_pending: '1', created_at: now_(), deleted: false
+  };
+  p.updated_at = p.created_at;
+  p.folder_id = createPatientFolder_(p.patient_id, p.full_name).getId();
+  appendRows_('Patients', [p]);
+  return p;
 }
 
 function createPatientFolder_(id, name) {

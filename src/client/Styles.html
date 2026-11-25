@@ -193,6 +193,13 @@
   .med-allergy { background:var(--red-l); color:var(--red-d); border:1px solid var(--red-line); }
   .med-sys { background:var(--amber-bg); color:var(--amber); border:1px solid var(--amber-line); }
   .med-meds { background:var(--blue-l); color:#18307F; }
+  .med-pending { background:var(--blue-l); color:#18307F; border:1px dashed #9DB4FA; align-items:center; }
+  .med-pending > span { flex:1; }
+  .med-pending .link-btn { flex:none; font-weight:700; }
+  .hero .meds .med-pending { background:#E8EEFF; color:#18307F; }
+  .badge.amber { color:var(--amber); background:var(--amber-bg); }
+  .new-pt { display:grid; gap:10px; margin-top:8px; padding:12px; border:1px dashed #9DB4FA; border-radius:12px; background:var(--blue-l); }
+  .new-pt .hint { font-size:13px; color:var(--mut); }
   .med.big { font-size:15px; padding:10px 14px; }
   .p-actions { display:grid; grid-template-columns:minmax(0, 1.5fr) minmax(0, 1fr) auto; gap:8px; }
   .p-actions > * { white-space:nowrap; padding-left:12px; padding-right:12px; }

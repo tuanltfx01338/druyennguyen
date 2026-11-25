@@ -252,3 +252,51 @@ test('weeklyBackup keeps the newest 8 copies', () => {
   let n = 0; const it = bk.getFiles(); while (it.hasNext()) { it.next(); n++; }
   assert.equal(n, 8);
 });
+
+test('appointments: book a new patient (placeholder record), reuse by phone, complete later', () => {
+  const { s } = load();
+  const today = s.todayVN ? s.todayVN() : new Date().toISOString().slice(0, 10);
+  // existing patient with two numbers
+  const old = s.savePatient({ full_name: 'Lê Văn Cũ', phone: '0903 111 222, 0912000111' });
+
+  // bad appointment data → no patient created
+  const before = s.searchPatients('').length;
+  assert.throws(() => s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn', phone: '0988777666' }, appt_date: 'xx' }), /Ngày hẹn/);
+  assert.throws(() => s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn' }, appt_date: today }), /số điện thoại/);
+  assert.equal(s.searchPatients('Cao Tuan').length, 0);
+
+  // new phone → placeholder patient + appointment
+  const r = s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn', phone: '0988 777 666' }, appt_date: today, start_time: '10:00', duration_min: 60 });
+  assert.ok(r.created_patient && !r.reused_patient);
+  const pid = r.created_patient.patient_id;
+  const p = plain(s.getPatient(pid)).patient;
+  assert.equal(p.info_pending, '1');
+  assert.match(p.notes, /bổ sung thông tin/);
+  const appt = plain(s.getAppointment(r.appt_id));
+  assert.equal(appt.patient.info_pending, '1');
+  assert.equal(plain(s.searchPatients('0988777666'))[0].info_pending, '1');
+
+  // same phone typed differently → reuse, no new record
+  const r2 = s.saveAppointment({ new_patient: { full_name: 'Tuấn Cao', phone: '0988.777.666' }, appt_date: today });
+  assert.equal(r2.reused_patient.patient_id, pid);
+  assert.equal(r2.created_patient, null);
+  // second number of an existing patient → reuse
+  const r3 = s.saveAppointment({ new_patient: { full_name: 'Cũ', phone: '0912000111' }, appt_date: today });
+  assert.equal(r3.reused_patient.patient_id, old);
+
+  // completing the record clears the flag
+  s.savePatient(Object.assign({}, p, { patient_id: pid, gender: 'Nam', dob: '01/02/1990' }));
+  assert.equal(plain(s.getPatient(pid)).patient.info_pending, '');
+  assert.ok(before >= 0);
+});
+
+test('setup adds header for new trailing columns on an existing sheet', () => {
+  const { s, sheet, gas } = load();
+  const sh = sheet('Patients');
+  const n = s.TABLES.Patients.length;
+  sh.getRange(1, n, 1, 1).setValues([['']]); // simulate a sheet created before info_pending existed
+  gas.PropertiesService.getScriptProperties().setProperties({ SCHEMA_VERSION: '1' });
+  s.setup(); // doGet() calls this when SCHEMA_VERSION differs
+  assert.equal(sh.getRange(1, n, 1, 1).getValues()[0][0], 'info_pending');
+  assert.equal(gas.PropertiesService.getScriptProperties().getProperty('SCHEMA_VERSION'), String(s.SCHEMA_VERSION));
+});

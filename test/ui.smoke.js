@@ -382,3 +382,46 @@ test('calendar editing: drag to move, drag edge to resize, quick reschedule in s
   assert.equal(d.querySelector('.cal-title b').textContent.length > 0, true); // still on the calendar
   w.close();
 });
+
+test('book an appointment for a patient not in the database: placeholder record, phone dedupe, complete later', async () => {
+  const server = loadServer();
+  const pad = n => String(n).padStart(2, '0');
+  const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+  const old = server.savePatient({ full_name: 'Phan Thị Có', phone: '0909123456' });
+  const { w, d } = boot(server);
+  await until(() => d.querySelector('.stat'));
+  await menu(d, 'Lịch hẹn');
+  await until(() => d.querySelector('#app').textContent.includes('Lịch hẹn mới') && d.querySelector('input[type=search]'));
+  set(w, d.querySelector('input[type=search]'), 'Cao Tuấn');
+  (await until(() => btn(d, 'Bệnh nhân mới:'))).click();
+  const [name, phone] = await until(() => { const x = d.querySelectorAll('.new-pt input'); return x.length === 2 && x; });
+  assert.equal(name.value, 'Cao Tuấn');
+  btn(d, 'Lưu').click();                                       // no phone yet → blocked, nothing saved
+  await until(() => d.getElementById('toast').textContent.includes('số điện thoại'));
+  set(w, phone, '0988 777 666');
+  d.querySelector('input[type=time]').value = '10:00'; d.querySelector('input[type=time]').dispatchEvent(new w.Event('input'));
+  btn(d, "60'").click();
+  btn(d, 'Lưu').click();
+  await until(() => d.getElementById('toast').textContent.includes('Tạo hồ sơ tạm'));
+  const appt = server.listAppointments(today, today).find(x => x.start_time === '10:00');
+  assert.equal(appt.info_pending, '1');
+  const pid = appt.patient_id;
+
+  // existing phone → app offers the existing record
+  await menu(d, 'Lịch hẹn');
+  await until(() => d.querySelector('#app').textContent.includes('Lịch hẹn mới') && d.querySelector('input[type=search]'));
+  set(w, d.querySelector('input[type=search]'), 'Có');
+  (await until(() => btn(d, 'Bệnh nhân mới:'))).click();
+  set(w, (await until(() => d.querySelectorAll('.new-pt input')[1])), '0909 123 456');
+  (await until(() => btn(d, 'Dùng hồ sơ này'))).click();
+  await until(() => d.querySelector('.picked') && d.querySelector('.picked').textContent.includes(old));
+
+  // patient page shows the placeholder note; "Bổ sung" opens the form and saving clears it
+  w.eval(`go('p/${pid}')`);
+  await until(() => d.querySelector('.med-pending'));
+  d.querySelector('.med-pending .link-btn').click();
+  await until(() => d.querySelector('#app').textContent.includes('Hồ sơ tạo nhanh khi đặt hẹn'));
+  btn(d, 'Lưu').click();
+  await until(() => server.getPatient(pid).patient.info_pending === '');
+  w.close();
+});

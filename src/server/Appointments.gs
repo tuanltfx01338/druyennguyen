@@ -53,6 +53,7 @@ function listAppointments(from, to) {
       o.phone = pats[a.patient_id].phone;
       o.allergies = pats[a.patient_id].allergies;
       o.avatar_id = pats[a.patient_id].avatar_id;
+      o.info_pending = pats[a.patient_id].info_pending || '';
       return o;
     });
   });
@@ -62,13 +63,41 @@ function getAppointment(id) {
   return api_('getAppointment', function () {
     var a = mustFindActive_('Appointments', 'appt_id', id, 'Lịch hẹn');
     var p = mustFindActive_('Patients', 'patient_id', a.patient_id, 'Bệnh nhân');
-    return { appointment: publicAppointment_(a), patient: { patient_id: p.patient_id, full_name: p.full_name, phone: p.phone, allergies: p.allergies, avatar_id: p.avatar_id } };
+    return { appointment: publicAppointment_(a), patient: { patient_id: p.patient_id, full_name: p.full_name, phone: p.phone, allergies: p.allergies, avatar_id: p.avatar_id, info_pending: p.info_pending || '' } };
   });
 }
 
+/**
+ * data.new_patient = { full_name, phone } when the patient is not in the database yet:
+ * reuse the patient whose phone matches, otherwise create a placeholder record (info_pending = '1')
+ * to be completed at the first visit.
+ */
 function saveAppointment(data) {
   return api_('saveAppointment', function () {
-    return withLock_(function () { return upsertAppointment_(data || {}); });
+    data = data || {};
+    return withLock_(function () {
+      var created = null, reused = null;
+      if (!data.patient_id && data.new_patient) {
+        // Validate the appointment before creating anyone, so a bad date never leaves an orphan patient.
+        var check = validateAppointment(Object.assign({}, data, { patient_id: 'pending' }));
+        if (check.errors.length) throw new Error(check.errors.join('; '));
+        var q = validateQuickPatient(data.new_patient);
+        if (q.errors.length) throw new Error(q.errors.join('; '));
+        var existing = findPatientByPhone(readActive_('Patients'), q.value.phone);
+        if (existing) {
+          reused = { patient_id: existing.patient_id, full_name: existing.full_name };
+          data = Object.assign({}, data, { patient_id: existing.patient_id });
+        } else {
+          var p = createQuickPatient_(q.value);
+          created = { patient_id: p.patient_id, full_name: p.full_name };
+          data = Object.assign({}, data, { patient_id: p.patient_id });
+        }
+      }
+      var r = upsertAppointment_(data);
+      r.created_patient = created;
+      r.reused_patient = reused;
+      return r;
+    });
   });
 }
 
