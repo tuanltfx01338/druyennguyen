@@ -4,7 +4,7 @@
   "private": true,
   "description": "Sổ bệnh án Nha khoa — Google Apps Script web app",
   "scripts": {
-    "test": "node --test test/lib.test.js test/server.test.js",
+    "test": "node --test test/lib.test.js test/server.test.js test/client-safety.test.js",
     "test:ui": "node --test test/ui.smoke.js",
     "push": "clasp push",
     "deployments": "clasp deployments"

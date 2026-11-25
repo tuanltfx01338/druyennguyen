@@ -5,7 +5,7 @@
  * If the browser → googleapis call is blocked (CORS) the uploader switches, once per session,
  * to the server path: 2 MB chunks via google.script.run → UrlFetchApp.
  */
-const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size';
+const DRIVE_UPLOAD = 'https:\/\/www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size';
 const CHUNK = 2 * 1024 * 1024; // must be a multiple of 256 KB for Drive resumable uploads
 const PARALLEL = 3;
 let directUploadOk = null; // null = untested, true/false after first attempt

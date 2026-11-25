@@ -274,7 +274,10 @@ function pagePatients() {
 }
 
 /* ---------- dashboard (landing page "Hôm nay") ---------- */
-const CHART_COLOR = '#2457F5'; // single series on white; validated with the dataviz palette script
+// Single series on white; validated with the dataviz palette script.
+const CHART_COLOR = '#2457F5';
+// No literal double slash in client strings: Apps Script's HTML pipeline can treat it as a comment (see test/client-safety.test.js).
+const DRIVE_VIEW_BASE = 'https:\/\/drive.google.com/file/d/';
 const dayLabel = (d, today) => d === today ? 'Hôm nay' : d === addDaysStr(today, 1) ? 'Ngày mai' : fmtDate(d).slice(0, 5);
 function addDaysStr(s, n) { const [y, m, d] = s.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, d + n)); return t.toISOString().slice(0, 10); }
 const nowMinutes = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
@@ -591,9 +594,9 @@ function openLightbox(images, index, onChanged) {
   const cache = new Map();
   async function show() {
     const cur = images[i];
-    name.textContent = [`${i + 1}/${images.length}`, cur.visit_date ? 'Khám ' + fmtDate(cur.visit_date) : '', cur.file_name, fmtSize(cur.size_bytes)].filter(Boolean).join(' · ');
+    name.textContent = [(i + 1) + '/' + images.length, cur.visit_date ? 'Khám ' + fmtDate(cur.visit_date) : '', cur.file_name, fmtSize(cur.size_bytes)].filter(Boolean).join(' · ');
     label.replaceChildren(...labelOptions(cur.label));
-    original.href = 'https://drive.google.com/file/d/' + encodeURIComponent(cur.image_id) + '/view';
+    original.href = DRIVE_VIEW_BASE + encodeURIComponent(cur.image_id) + '/view';
     img.removeAttribute('src'); status.textContent = 'Đang tải ảnh…';
     try {
       if (!cache.has(cur.image_id)) cache.set(cur.image_id, await api('getPreview', cur.image_id));

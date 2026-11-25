@@ -7,6 +7,26 @@
   <?!= include('client/Styles'); ?>
 </head>
 <body>
+  <script>
+    // Runs before the app scripts: if they fail to load, show the error instead of a dead page,
+    // and stop href="#" links from navigating the whole window (base target is _top).
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('a[href="#"]');
+      if (a) e.preventDefault();
+    }, true);
+    window.addEventListener('error', function (e) {
+      var box = document.getElementById('boot-error');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'boot-error';
+        box.setAttribute('role', 'alert');
+        box.style.cssText = 'position:fixed;left:12px;right:12px;top:12px;z-index:9999;padding:12px 14px;border-radius:10px;background:#FEF3F2;color:#B42318;border:1px solid #FDA29B;font:14px/1.4 system-ui,sans-serif;white-space:pre-wrap';
+        box.textContent = 'App gặp lỗi khi tải. Chụp màn hình này gửi người cài đặt:\n';
+        document.body.appendChild(box);
+      }
+      box.textContent += '\n' + (e.message || 'Lỗi không rõ') + (e.lineno ? ' (dòng ' + e.lineno + ':' + e.colno + ')' : '');
+    });
+  </script>
   <nav class="nav" aria-label="Điều hướng">
     <a href="#" class="brand" data-path="" data-icon="tooth">Sổ bệnh án</a>
     <a href="#" data-path="" data-icon="today">Hôm nay</a>
