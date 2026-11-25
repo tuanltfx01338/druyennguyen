@@ -1,70 +1,161 @@
 <script>
 'use strict';
 /*
- * Uploads ORIGINAL photos (no compression) straight from the browser to Drive (resumable upload).
- * If the browser → googleapis call is blocked (CORS) the uploader switches, once per session,
- * to the server path: 2 MB chunks via google.script.run → UrlFetchApp.
+ * Uploads ORIGINAL photos (no compression) to Drive with a resumable session, in 4 MB pieces.
+ * A dropped connection does not restart the photo: the uploader waits for the network, asks Drive how many
+ * bytes it already has and continues from there. The session is kept on the item, so "Tải tiếp ảnh lỗi"
+ * also resumes (Drive keeps a session for about a week; it lives in this page's memory only).
+ * Transport: browser → Drive directly when allowed; if that call is blocked (CORS) the uploader switches,
+ * once per page, to the server path (google.script.run → UrlFetchApp) with the same resume logic.
  */
 const DRIVE_UPLOAD = 'https:\/\/www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size';
-// Server path only (when the browser may not call Drive directly). Multiple of 256 KB for Drive resumable uploads;
-// 4 MB halves the round trips of 2 MB and stays far below the google.script.run / UrlFetchApp payload limits once base64-encoded.
+// Multiple of 256 KB (Drive rule). Small enough that a drop on weak 4G loses little, large enough to keep requests few;
+// on the server path it stays far below the google.script.run / UrlFetchApp limits once base64-encoded.
 const CHUNK = 4 * 1024 * 1024;
 const PARALLEL = 3;
+// Waits before retrying a piece; after the last one the photo is marked failed (and resumable). Tests shorten it.
+const RETRY_DELAYS = window.__uploadRetryDelays || [1000, 2000, 4000, 8000, 15000, 30000];
 let directUploadOk = null; // null = untested, true/false after first attempt
 
 const corsError = msg => Object.assign(new Error(msg), { cors: true });
+const fatalError = msg => Object.assign(new Error(msg), { fatal: true });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+/** Wait until the device is back online (or at most maxMs, then try anyway). */
+function waitOnline(maxMs = 120000) {
+  if (navigator.onLine !== false) return Promise.resolve();
+  return new Promise(r => { const t = setTimeout(done, maxMs); function done() { clearTimeout(t); window.removeEventListener('online', done); r(); } window.addEventListener('online', done); });
+}
+/** "bytes=0-1048575" → 1048576 (next byte to send); no header → fallback. */
+const nextFromRange = (range, fallback) => { const m = /bytes=0-(\d+)/.exec(range || ''); return m ? Number(m[1]) + 1 : fallback; };
 
-async function uploadDirect(item, ctx) {
-  let res;
-  try {
-    res = await fetch(DRIVE_UPLOAD, {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + ctx.token,
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Upload-Content-Type': item.file.type || 'application/octet-stream',
-        'X-Upload-Content-Length': String(item.file.size),
-      },
-      body: JSON.stringify({ name: item.file.name, parents: [ctx.folderId] }),
+/** Browser → Drive. put/status resolve to { done, file?, next? }; network failures reject (retryable). */
+const directTransport = {
+  via: 'direct',
+  async open(item, ctx) {
+    let res;
+    try {
+      res = await fetch(DRIVE_UPLOAD, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + ctx.token,
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Type': item.file.type || 'application/octet-stream',
+          'X-Upload-Content-Length': String(item.file.size),
+        },
+        body: JSON.stringify({ name: item.file.name, parents: [ctx.folderId] }),
+      });
+    } catch (e) { throw corsError('Trình duyệt chặn gọi trực tiếp Drive'); }
+    if (!res.ok) throw new Error('Drive từ chối (' + res.status + ')');
+    const loc = res.headers.get('Location');
+    if (!loc) throw corsError('Không đọc được phiên upload');
+    return loc;
+  },
+  send(uri, ctx, range, body, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', uri);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + ctx.token);
+      xhr.setRequestHeader('Content-Range', range);
+      xhr.timeout = 180000;
+      if (onProgress) xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded); };
+      xhr.onload = () => {
+        if (xhr.status === 200 || xhr.status === 201) resolve({ done: true, file: JSON.parse(xhr.responseText) });
+        else if (xhr.status === 308) resolve({ done: false, range: xhr.getResponseHeader('Range') });
+        else if (xhr.status === 404 || xhr.status === 410) reject(Object.assign(new Error('Phiên tải lên đã hết hạn'), { expired: true }));
+        else if (xhr.status >= 500 || xhr.status === 429) reject(new Error('Drive bận (' + xhr.status + ')'));
+        else reject(fatalError('Upload lỗi (' + xhr.status + ')'));
+      };
+      xhr.onerror = () => reject(new Error('Mất kết nối khi tải ảnh'));
+      xhr.ontimeout = () => reject(new Error('Mạng quá chậm, hết thời gian chờ'));
+      xhr.send(body);
     });
-  } catch (e) { throw corsError('Trình duyệt chặn gọi trực tiếp Drive'); }
-  if (!res.ok) throw new Error('Drive từ chối (' + res.status + ')');
-  const loc = res.headers.get('Location');
-  if (!loc) throw corsError('Không đọc được phiên upload');
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', loc);
-    xhr.upload.onprogress = e => { if (e.lengthComputable) item.setProgress(e.loaded / e.total); };
-    xhr.onload = () => (xhr.status === 200 || xhr.status === 201)
-      ? resolve(JSON.parse(xhr.responseText)) : reject(new Error('Upload lỗi (' + xhr.status + ')'));
-    xhr.onerror = () => reject(corsError('Mất kết nối khi tải ảnh'));
-    xhr.send(item.file);
-  });
-}
+  },
+  async put(uri, ctx, start, blob, total, onProgress) {
+    const r = await this.send(uri, ctx, 'bytes ' + start + '-' + (start + blob.size - 1) + '/' + total, blob, onProgress);
+    // If Drive's Range header is not readable here, a 308 still means the whole piece was stored.
+    return r.done ? r : { done: false, next: nextFromRange(r.range, start + blob.size) };
+  },
+  async status(uri, ctx, total, assumed) {
+    const r = await this.send(uri, ctx, 'bytes *\/' + total, null);
+    return r.done ? r : { done: false, next: nextFromRange(r.range, r.range === null ? assumed : 0) };
+  },
+};
 
-async function uploadViaServer(item, ctx) {
-  const url = await api('startServerUpload', ctx.folderId, item.file.name, item.file.type, item.file.size);
-  let start = 0;
-  while (start < item.file.size) {
-    const blob = item.file.slice(start, start + CHUNK);
-    const r = await api('uploadChunk', url, await blobToBase64(blob), start, item.file.size);
-    start += blob.size;
-    item.setProgress(start / item.file.size);
-    if (r.done) return r.file;
+/** Browser → Apps Script → Drive (when the direct call is blocked). Same contract as directTransport. */
+const serverTransport = {
+  via: 'server',
+  open: (item, ctx) => rpc('startServerUpload', ctx.folderId, item.file.name, item.file.type, item.file.size),
+  async put(uri, ctx, start, blob, total) {
+    const r = await rpc('uploadChunk', uri, await blobToBase64(blob), start, total);
+    if (r.expired) throw Object.assign(new Error('Phiên tải lên đã hết hạn'), { expired: true });
+    return r.done ? r : { done: false, next: r.next != null ? r.next : start + blob.size };
+  },
+  status: (uri, ctx, total) => rpc('uploadStatus', uri, total).then(r => {
+    if (r.expired) throw Object.assign(new Error('Phiên tải lên đã hết hạn'), { expired: true });
+    return r;
+  }),
+};
+
+/**
+ * Send one photo piece by piece, resuming after failures. item.session = { via, uri, next } survives a failed
+ * attempt, so the next call (retry button, back online) continues instead of restarting.
+ */
+async function uploadResumable(item, ctx, transport) {
+  const total = item.file.size;
+  let s = item.session && item.session.via === transport.via ? item.session : null;
+  if (!s) { s = item.session = { via: transport.via, uri: await transport.open(item, ctx), next: 0 }; }
+  else {
+    // Resuming: ask Drive what it really has before sending anything.
+    try {
+      const st = await transport.status(s.uri, ctx, total, s.next);
+      if (st.done) return st.file;
+      s.next = st.next;
+    } catch (e) {
+      if (!e.expired) throw e;
+      s = item.session = { via: transport.via, uri: await transport.open(item, ctx), next: 0 };
+    }
   }
-  throw new Error('Upload chưa hoàn tất');
+  item.setProgress(s.next / total);
+  let fails = 0, restarted = false;
+  for (;;) {
+    const blob = item.file.slice(s.next, s.next + CHUNK);
+    try {
+      const r = await transport.put(s.uri, ctx, s.next, blob, total, loaded => item.setProgress((s.next + loaded) / total));
+      if (r.done) { item.session = null; return r.file; }
+      s.next = r.next; fails = 0;
+      item.setProgress(s.next / total);
+      if (transport.via === 'direct') directUploadOk = true;
+    } catch (e) {
+      // Drive refused a resumed piece (our idea of the offset was wrong): start this photo over once, cleanly.
+      if (e.fatal && s.next > 0 && !restarted) { restarted = true; s = item.session = { via: transport.via, uri: await transport.open(item, ctx), next: 0 }; item.setProgress(0); continue; }
+      if (e.fatal || e.cors) throw e;
+      // First piece through a never-tested direct path fails while online: most likely CORS on PUT → let the caller switch.
+      if (transport.via === 'direct' && directUploadOk === null && s.next === 0 && navigator.onLine !== false) throw corsError(e.message);
+      if (e.expired) { s = item.session = { via: transport.via, uri: await transport.open(item, ctx), next: 0 }; continue; }
+      if (fails >= RETRY_DELAYS.length) throw e;
+      item.setWaiting(navigator.onLine === false ? 'Mất mạng — sẽ tải tiếp từ ' + Math.round(s.next / total * 100) + '%' : 'Mạng chập chờn — thử lại…');
+      await waitOnline();
+      await sleep(RETRY_DELAYS[fails++]);
+      try { const st = await transport.status(s.uri, ctx, total, s.next); if (st.done) { item.session = null; return st.file; } s.next = st.next; }
+      catch (e2) { if (e2.expired) s = item.session = { via: transport.via, uri: await transport.open(item, ctx), next: 0 }; }
+      item.setProgress(s.next / total);
+    }
+  }
 }
 
-/** Direct browser → Drive first; on CORS block switch (once per session) to the server-chunk path. */
+/** Direct browser → Drive first; when that is blocked (CORS), switch (once per page) to the server path. */
 async function sendToDrive(item, ctx) {
   if (directUploadOk !== false) {
-    try { const f = await uploadDirect(item, ctx); directUploadOk = true; return f; }
-    catch (e) { if (directUploadOk === true || !e.cors) throw e; directUploadOk = false; item.setProgress(0); }
+    try { return await uploadResumable(item, ctx, directTransport); }
+    catch (e) {
+      // Blocked before any byte got through: this browser cannot talk to Drive directly. Anything else is a real failure.
+      if (!e.cors || directUploadOk === true) throw e;
+      directUploadOk = false; item.session = null; item.setProgress(0);
+    }
   }
-  return uploadViaServer(item, ctx);
+  return uploadResumable(item, ctx, serverTransport);
 }
 
-/** Downscale a portrait to `max` px JPEG (avatars only — clinical photos stay original). Falls back to the file. */
 async function compressImage(file, max = 640, quality = 0.85) {
   try {
     const url = URL.createObjectURL(file);
@@ -86,7 +177,7 @@ function createUploader({ getVisitId, onUploaded }) {
   const list = h('div', { class: 'upload-list' });
   const batchLabel = h('select', { style: 'width:auto' }, labelOptions('khac'));
   const input = h('input', { type: 'file', accept: 'image/\*', multiple: true, class: 'hidden' });
-  const retryBtn = h('button', { type: 'button', class: 'hidden', onclick: () => startAll() }, 'Tải lại ảnh lỗi');
+  const retryBtn = h('button', { type: 'button', class: 'hidden', onclick: () => startAll() }, 'Tải tiếp ảnh lỗi');
   const note = h('div', { class: 'muted' });
 
   input.addEventListener('change', () => {
@@ -111,11 +202,12 @@ function createUploader({ getVisitId, onUploaded }) {
     const row = h('div', { class: 'up' }, h('div', { class: 'up-name' }, pic, h('span', {}, item.file.name + ' · ' + fmtSize(item.file.size))), h('div', {}, sel, ' ', rm),
       h('div', { class: 'bar' }, bar), st);
     item.setProgress = p => { item.progress = p; bar.style.width = Math.round(p * 100) + '%'; st.textContent = Math.round(p * 100) + '%'; };
+    item.setWaiting = text => { st.textContent = text; };
     item.render = () => {
       row.className = 'up ' + item.status;
       sel.disabled = rm.disabled = item.status === 'uploading' || item.status === 'done';
       if (item.status === 'done') st.textContent = 'Đã tải lên';
-      if (item.status === 'error') st.textContent = 'Lỗi: ' + item.error;
+      if (item.status === 'error') st.textContent = (item.session && item.session.next ? 'Dừng ở ' + Math.round(item.session.next / item.file.size * 100) + '% — ' : 'Lỗi: ') + item.error;
       if (item.status === 'queued') st.textContent = 'Chờ tải';
     };
     item.render();
@@ -172,6 +264,13 @@ function createUploader({ getVisitId, onUploaded }) {
     })();
     return running;
   }
+
+  // Back online: continue failed photos by themselves (only while this form is on screen and the visit exists).
+  const onOnline = () => {
+    if (!list.isConnected) return window.removeEventListener('online', onOnline);
+    if (getVisitId() && items.some(i => i.status === 'error')) { toast('Có mạng lại — đang tải tiếp ảnh'); startAll(); }
+  };
+  window.addEventListener('online', onOnline);
 
   return {
     el: h('div', {},

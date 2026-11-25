@@ -27,7 +27,7 @@ function buildHtml(bootJson = '') {
     .replace(/<\?!= include\('client\/([\w.]+)'\); \?>/g, (_, f) => fs.readFileSync(path.join(SRC, 'client', f + '.html'), 'utf8'));
 }
 
-function boot(server, { withBoot = false, observer = null } = {}) {
+function boot(server, { withBoot = false, observer = null, retryDelays = null } = {}) {
   const calls = [];
   const dom = new JSDOM(buildHtml(withBoot ? server.bootPayload_() : ''), {
     runScripts: 'dangerously', pretendToBeVisual: true,
@@ -49,6 +49,7 @@ function boot(server, { withBoot = false, observer = null } = {}) {
         url: { getLocation: cb => cb({ hash: '' }) },
       } };
       if (observer) w.IntersectionObserver = observer;
+      if (retryDelays) w.__uploadRetryDelays = retryDelays;
       w.confirm = () => true;
       w.scrollTo = () => {};
       w.fetch = () => Promise.reject(new TypeError('Failed to fetch')); // simulate CORS block → server fallback
@@ -505,5 +506,55 @@ test('thumbnails load lazily: only photos near the screen are requested', async 
   fire(observed.slice());
   await until(() => d.querySelectorAll('.thumbs img').length === 2);
   assert.equal(calls.filter(c => c === 'getThumbs').length, 1, 'one batched request');
+  w.close();
+});
+
+test('large photo on a dropping connection: resumes from where it stopped, never restarts', async () => {
+  const server = loadServer();
+  const pid = server.savePatient({ full_name: 'Mạng Yếu' });
+  const vid = server.saveVisit({ patient_id: pid, visit_date: '2025-02-01', reason: 'Chụp phim' });
+  const sent = [];                // start offsets of pieces that reached Drive
+  let failNext = 0;               // simulate dropped connections
+  const realChunk = server.uploadChunk;
+  const { w, d } = boot(server, { retryDelays: [5, 5] });
+  await until(() => d.querySelector('.stat'));
+  w.eval(`go('v/${vid}')`);
+  const input = await until(() => d.querySelector('input[type=file]'));
+  const MB = 1024 * 1024;
+  const big = new w.File([new Uint8Array(13 * MB)], 'pano.jpg', { type: 'image/jpeg' }); // 4 pieces of 4 MB
+  // 1) one drop after the first piece → retried automatically, carries on
+  let calls = 0;
+  server.uploadChunk = (uri, b64, start, total) => {
+    calls++;
+    if (calls === 2 && failNext === 0) { failNext = -1; throw new Error('NetworkError: connection lost'); }
+    if (failNext > 0) { failNext--; throw new Error('NetworkError: connection lost'); }
+    sent.push(start);
+    return realChunk(uri, b64, start, total);
+  };
+  Object.defineProperty(input, 'files', { value: [big], configurable: true });
+  input.dispatchEvent(new w.Event('change'));
+  await until(() => d.querySelector('.up.done'), 8000);
+  assert.deepEqual(sent, [0, 4 * MB, 8 * MB, 12 * MB], 'each piece sent once; the dropped one resent, nothing from 0 again');
+
+  // 2) long outage: retries run out → "Dừng ở 31%", then "Tải tiếp ảnh lỗi" continues from there
+  sent.length = 0; calls = 0;
+  server.uploadChunk = (uri, b64, start, total) => {
+    calls++;
+    if (calls >= 2 && failNext !== -2) throw new Error('NetworkError: connection lost');
+    sent.push(start);
+    return realChunk(uri, b64, start, total);
+  };
+  const big2 = new w.File([new Uint8Array(13 * MB)], 'pano2.jpg', { type: 'image/jpeg' });
+  Object.defineProperty(input, 'files', { value: [big2], configurable: true });
+  input.dispatchEvent(new w.Event('change'));
+  await until(() => d.querySelector('.up.error'), 8000);
+  assert.match(d.querySelector('.up.error').textContent, /Dừng ở 31%/);
+  failNext = -2;                  // network back
+  btn(d, 'Tải tiếp ảnh lỗi').click();
+  await until(() => d.querySelectorAll('.up.done').length === 2, 8000);
+  assert.deepEqual(sent, [0, 4 * MB, 8 * MB, 12 * MB], 'resumed at 4 MB, did not restart');
+  const imgs = server.getVisit(vid).visit.images;
+  assert.equal(imgs.length, 2);
+  assert.ok(imgs.every(i => Number(i.size_bytes) === 13 * MB), 'originals complete');
   w.close();
 });

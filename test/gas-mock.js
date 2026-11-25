@@ -149,11 +149,14 @@ function createGas(opts = {}) {
           return resp(200, {}, { Location: sid });
         }
         const ses = sessions.get(url);
+        if (!ses) return resp(404, {});
+        const range = () => (ses.got ? { Range: 'bytes=0-' + (ses.got - 1) } : {});
+        if (/^bytes \*\//.test(o.headers['Content-Range'])) return resp(308, {}, range()); // status query
         const m = /bytes (\d+)-(\d+)\/(\d+)/.exec(o.headers['Content-Range']);
-        if (!ses || Number(m[1]) !== ses.got || o.payload.length !== Number(m[2]) - Number(m[1]) + 1) return resp(400, {});
+        if (Number(m[1]) !== ses.got || o.payload.length !== Number(m[2]) - Number(m[1]) + 1) return resp(400, {});
         ses.got += o.payload.length;
         ses.parts.push(o.payload);
-        if (ses.got < ses.total) return resp(308, {});
+        if (ses.got < ses.total) return resp(308, {}, range());
         const all = new Uint8Array(ses.total); let off = 0;
         for (const p of ses.parts) { all.set(p, off); off += p.length; }
         const f = new File(ses.meta.name, items.get(ses.meta.parents[0]), ses.mime, '', ses.total, all);

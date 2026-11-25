@@ -366,3 +366,21 @@ test('previews: size follows the screen within 400–1600 px; thumbnails are 320
   assert.deepEqual(urls.map(u => u.split('=s')[1]), ['1200', '1600', '400', '1600', '320']);
   gas.UrlFetchApp.fetchAll = real;
 });
+
+test('resumable upload (server path): status tells where to continue; expired session reported', () => {
+  const { s, gas } = load();
+  const pid = s.savePatient({ full_name: 'Ảnh Lớn' });
+  const v = s.saveVisit({ patient_id: pid, visit_date: '2025-01-10' });
+  const ctx = s.getUploadContext(v);
+  const total = 10;
+  const uri = s.startServerUpload(ctx.folderId, 'big.jpg', 'image/jpeg', total);
+  assert.deepEqual(plain(s.uploadStatus(uri, total)), { done: false, next: 0 });
+  const b64 = n => gas.Utilities.base64Encode(new Uint8Array(n));
+  assert.deepEqual(plain(s.uploadChunk(uri, b64(4), 0, total)), { done: false, next: 4 });
+  // connection dropped here; later the client asks where to continue
+  assert.deepEqual(plain(s.uploadStatus(uri, total)), { done: false, next: 4 });
+  const done = s.uploadChunk(uri, b64(6), 4, total);
+  assert.equal(done.done, true);
+  assert.equal(Number(done.file.size), total);
+  assert.equal(s.uploadStatus(uri.replace(/upload_id=\d+/, 'upload_id=999'), total).expired, true);
+});

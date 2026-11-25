@@ -58,11 +58,31 @@ function uploadChunk(sessionUrl, b64, start, total) {
       followRedirects: false, muteHttpExceptions: true,
       headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'Content-Range': 'bytes ' + start + '-' + end + '/' + total }
     });
-    var code = res.getResponseCode();
-    if (code === 308) return { done: false };
-    if (code === 200 || code === 201) return { done: true, file: JSON.parse(res.getContentText()) };
-    throw new Error('Upload lỗi (' + code + ')');
+    return uploadResult_(res, end + 1);
   });
+}
+/** Where a resumable session stands (after a dropped connection): { done, file } | { done:false, next } | { expired }. */
+function uploadStatus(sessionUrl, total) {
+  return api_('uploadStatus', function () {
+    if (String(sessionUrl).indexOf(DRIVE_UPLOAD_URL + '?') !== 0) throw new Error('Session URL không hợp lệ');
+    var res = UrlFetchApp.fetch(sessionUrl, {
+      method: 'put', payload: '', followRedirects: false, muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'Content-Range': 'bytes *' + '/' + Number(total) }
+    });
+    return uploadResult_(res, 0);
+  });
+}
+/** 308 → next byte from Drive's Range header ("bytes=0-N"); no header on 308 means nothing stored yet. */
+function uploadResult_(res, fallbackNext) {
+  var code = res.getResponseCode();
+  if (code === 200 || code === 201) return { done: true, file: JSON.parse(res.getContentText()) };
+  if (code === 404 || code === 410) return { done: false, expired: true };
+  if (code === 308) {
+    var h = res.getHeaders(), range = h.Range || h.range;
+    var m = /bytes=0-(\d+)/.exec(range || '');
+    return { done: false, next: m ? Number(m[1]) + 1 : (range == null && fallbackNext === 0 ? 0 : fallbackNext) };
+  }
+  throw new Error('Upload lỗi (' + code + ')');
 }
 
 /** Records uploaded files; only accepts files that really sit in the visit folder. */
