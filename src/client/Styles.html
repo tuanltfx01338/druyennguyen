@@ -247,6 +247,10 @@
   .thumb .lbl { position:absolute; left:5px; bottom:5px; font-size:11px; background:rgba(11,46,51,.7); color:#fff; padding:1px 6px; border-radius:6px; }
   .thumb .ph { display:flex; align-items:center; justify-content:center; height:100%; color:var(--mut-2); margin:0; min-height:0; }
   .upload-list .up { display:grid; grid-template-columns:1fr auto; gap:4px 8px; padding:9px 0; border-bottom:1px solid var(--line-2); font-size:14px; }
+  .upload-list .up-name { display:flex; align-items:center; gap:10px; min-width:0; }
+  .upload-list .up-name > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .up-pic { width:44px; height:44px; flex:none; border-radius:8px; background:var(--brand-l); overflow:hidden; }
+  .up-pic img { width:100%; height:100%; object-fit:cover; display:block; }
   .upload-list .up select { width:auto; min-height:36px; padding:4px 8px; font-size:14px; }
   .bar { height:6px; background:var(--line-2); border-radius:3px; overflow:hidden; grid-column:1 / -1; }
   .bar > i { display:block; height:100%; background:var(--blue); width:0; transition:width .2s; }
@@ -255,6 +259,7 @@
   .lightbox { position:fixed; inset:0; background:rgba(6,26,28,.94); z-index:60; display:flex; flex-direction:column; color:#fff; }
   .lightbox .lb-top { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px; }
   .lightbox .lb-top select { width:auto; min-height:38px; } .lightbox .lb-top .grow { flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lightbox img.lb-blur { width:100%; height:100%; object-fit:contain; filter:blur(6px); }
   .lightbox .lb-img { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; touch-action:pan-y pinch-zoom; }
   .lightbox img { max-width:100%; max-height:100%; }
   .lightbox .lb-nav { position:absolute; top:50%; transform:translateY(-50%); font-size:30px; background:rgba(255,255,255,.14); color:#fff; border:0; }

@@ -350,3 +350,19 @@ test('boot payload embeds the dashboard and quota', () => {
   assert.ok(b.quota.limit > 0);
   assert.match(b.today, /^\d{4}-\d{2}-\d{2}$/);
 });
+
+test('previews: size follows the screen within 400–1600 px; thumbnails are 320 px', () => {
+  const { s, gas } = load();
+  const pid = s.savePatient({ full_name: 'Xem Ảnh' });
+  const v = s.saveVisit({ patient_id: pid, visit_date: '2025-01-10' });
+  const ctx = s.getUploadContext(v);
+  const f = new gas.__File('x.jpg', gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 10);
+  s.registerImages(v, [{ id: f.id, label: 'khac' }]);
+  const urls = [];
+  const real = gas.UrlFetchApp.fetchAll;
+  gas.UrlFetchApp.fetchAll = reqs => { reqs.forEach(r => urls.push(r.url)); return real(reqs); };
+  s.getPreview(f.id, 1200); s.getPreview(f.id, 99999); s.getPreview(f.id, 10); s.getPreview(f.id);
+  s.getThumbs([f.id]);
+  assert.deepEqual(urls.map(u => u.split('=s')[1]), ['1200', '1600', '400', '1600', '320']);
+  gas.UrlFetchApp.fetchAll = real;
+});

@@ -632,28 +632,75 @@ const thumbCache = new Map(); // image_id → data URL, so switching tabs does n
 function thumbGrid(images, onChanged, list = images, offset = 0) {
   if (!images.length) return null;
   return h('div', { class: 'thumbs' }, images.map((img, i) => {
-    const box = thumbCache.has(img.image_id) ? h('img', { src: thumbCache.get(img.image_id), alt: '' }) : h('div', { class: 'ph' }, '🖼');
+    const box = thumbCache.has(img.image_id) ? h('img', { src: thumbCache.get(img.image_id), alt: '', decoding: 'async' }) : h('div', { class: 'ph', 'data-image-id': img.image_id }, '🖼');
     thumbEls.set(img.image_id, box);
     return h('button', { class: 'thumb', title: img.file_name, onclick: () => openLightbox(list, offset + i, onChanged) },
       box, h('span', { class: 'lbl' }, LABELS[img.label] || ''));
   }));
 }
-async function loadThumbs(images, attempt = 0) {
-  const ids = images.map(i => i.image_id).filter(id => !thumbCache.has(id));
+/*
+ * Lazy thumbnails: a thumb is requested only when it scrolls near the screen (photos inside a closed
+ * "lần khám" are never requested until it is opened). Requests are batched; Drive needs a few seconds to
+ * make thumbnails for fresh uploads, so misses are retried later.
+ */
+const thumbQueue = new Set();
+let thumbTimer = null;
+const thumbObserver = 'IntersectionObserver' in window
+  ? new IntersectionObserver(entries => entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      thumbObserver.unobserve(e.target);
+      queueThumb(e.target.dataset.imageId);
+    }), { rootMargin: '400px 0px' })
+  : null;
+function queueThumb(id) {
+  if (!id || thumbCache.has(id)) return;
+  thumbQueue.add(id);
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(flushThumbs, 40);
+}
+async function flushThumbs(attempt = 0, only = null) {
+  const ids = only || [...thumbQueue];
+  if (!only) thumbQueue.clear();
   const missing = [];
   for (let i = 0; i < ids.length; i += 20) {
     const batch = ids.slice(i, i + 20);
     let res;
     try { res = await api('getThumbs', batch); } catch (e) { continue; }
     for (const id of batch) {
-      const box = thumbEls.get(id);
-      if (!box || !box.isConnected) continue;
-      if (res[id]) { thumbCache.set(id, res[id]); box.replaceWith(h('img', { src: res[id], alt: '' })); }
-      else missing.push(images.find(x => x.image_id === id));
+      if (res[id]) { thumbCache.set(id, res[id]); showThumb(id, res[id]); }
+      else missing.push(id);
     }
   }
-  // Drive needs a few seconds to generate thumbnails for fresh uploads.
-  if (missing.length && attempt < 3) setTimeout(() => loadThumbs(missing, attempt + 1), 6000 * (attempt + 1));
+  const stillShown = missing.filter(id => { const b = thumbEls.get(id); return b && b.isConnected; });
+  if (stillShown.length && attempt < 3) setTimeout(() => flushThumbs(attempt + 1, stillShown), 6000 * (attempt + 1));
+}
+function showThumb(id, src) {
+  const box = thumbEls.get(id);
+  if (box && box.isConnected && box.tagName !== 'IMG') { const img = h('img', { src, alt: '', decoding: 'async' }); box.replaceWith(img); thumbEls.set(id, img); }
+}
+/** Start watching the thumbnails of these images (call after they are in the page). */
+function loadThumbs(images) {
+  for (const img of images) {
+    const box = thumbEls.get(img.image_id);
+    if (!box || thumbCache.has(img.image_id)) continue;
+    if (thumbObserver) thumbObserver.observe(box); else queueThumb(img.image_id); // no observer (old browser): load now
+  }
+}
+
+/* Previews for the lightbox: kept in memory across openings (bounded), sized to the screen. */
+const previewCache = new Map(); // image_id → Promise<data URL | null>
+const PREVIEW_KEEP = 24;
+function previewSize() {
+  const px = Math.max(window.innerWidth, window.innerHeight) * (window.devicePixelRatio || 1);
+  return Math.min(1600, Math.max(800, Math.ceil(px / 200) * 200));
+}
+function loadPreview(id) {
+  if (!previewCache.has(id)) {
+    const p = api('getPreview', id, previewSize()).catch(e => { previewCache.delete(id); throw e; });
+    previewCache.set(id, p);
+    while (previewCache.size > PREVIEW_KEEP) previewCache.delete(previewCache.keys().next().value);
+  } else { const p = previewCache.get(id); previewCache.delete(id); previewCache.set(id, p); } // most recently used last
+  return previewCache.get(id);
 }
 
 function openLightbox(images, index, onChanged) {
@@ -667,20 +714,23 @@ function openLightbox(images, index, onChanged) {
   } });
   const original = h('a', { class: 'btn', target: '_blank', rel: 'noopener' }, 'Bản gốc');
   let changed = false;
-  const cache = new Map();
   async function show() {
     const cur = images[i];
     name.textContent = [(i + 1) + '/' + images.length, cur.visit_date ? 'Khám ' + fmtDate(cur.visit_date) : '', cur.file_name, fmtSize(cur.size_bytes)].filter(Boolean).join(' · ');
     label.replaceChildren(...labelOptions(cur.label));
     original.href = DRIVE_VIEW_BASE + encodeURIComponent(cur.image_id) + '/view';
-    img.removeAttribute('src'); status.textContent = 'Đang tải ảnh…';
+    // Blur-up: show the thumbnail we already have at once, swap in the sharp preview when it arrives.
+    const thumb = thumbCache.get(cur.image_id);
+    if (thumb) { img.src = thumb; img.classList.add('lb-blur'); } else { img.removeAttribute('src'); img.classList.remove('lb-blur'); }
+    status.textContent = 'Đang tải ảnh nét…';
     try {
-      if (!cache.has(cur.image_id)) cache.set(cur.image_id, await api('getPreview', cur.image_id));
+      const src = await loadPreview(cur.image_id);
       if (images[i] !== cur) return;
-      const src = cache.get(cur.image_id);
-      if (src) { img.src = src; status.textContent = ''; }
+      if (src) { img.src = src; img.classList.remove('lb-blur'); status.textContent = ''; }
       else status.textContent = 'Drive chưa tạo xong bản xem trước — bấm "Bản gốc" để xem.';
-    } catch (e) { status.textContent = errMsg(e); }
+      // The next swipe is almost always ±1: fetch those while she looks at this one.
+      if (images.length > 1) [1, -1].forEach(d => loadPreview(images[(i + d + images.length) % images.length].image_id).catch(() => {}));
+    } catch (e) { if (images[i] === cur) status.textContent = errMsg(e); }
   }
   const move = d => { i = (i + d + images.length) % images.length; show(); };
   const close = () => { box.remove(); document.removeEventListener('keydown', onKey); if (changed && onChanged) onChanged(); };

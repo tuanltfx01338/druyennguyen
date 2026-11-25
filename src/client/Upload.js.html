@@ -6,7 +6,9 @@
  * to the server path: 2 MB chunks via google.script.run → UrlFetchApp.
  */
 const DRIVE_UPLOAD = 'https:\/\/www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size';
-const CHUNK = 2 * 1024 * 1024; // must be a multiple of 256 KB for Drive resumable uploads
+// Server path only (when the browser may not call Drive directly). Multiple of 256 KB for Drive resumable uploads;
+// 4 MB halves the round trips of 2 MB and stays far below the google.script.run / UrlFetchApp payload limits once base64-encoded.
+const CHUNK = 4 * 1024 * 1024;
 const PARALLEL = 3;
 let directUploadOk = null; // null = untested, true/false after first attempt
 
@@ -99,7 +101,14 @@ function createUploader({ getVisitId, onUploaded }) {
     const st = h('span', { class: 'muted' });
     const sel = h('select', { style: 'width:auto', onchange: () => { item.label = sel.value; } }, labelOptions(item.label));
     const rm = h('button', { type: 'button', onclick: () => { items.splice(items.indexOf(item), 1); row.remove(); refresh(); } }, '✕');
-    const row = h('div', { class: 'up' }, h('div', {}, item.file.name + ' · ' + fmtSize(item.file.size)), h('div', {}, sel, ' ', rm),
+    const pic = h('span', { class: 'up-pic' });
+    // Small local preview: shown in this list at once, and reused as the thumbnail after saving,
+    // so the doctor never waits for Drive to generate one. The original file is uploaded untouched.
+    item.thumbReady = compressImage(file, 320, 0.8)
+      .then(b => (b === file ? null : blobToDataUrl(b)))
+      .then(url => { if (url) { item.thumb = url; pic.replaceChildren(h('img', { src: url, alt: '' })); } })
+      .catch(() => {});
+    const row = h('div', { class: 'up' }, h('div', { class: 'up-name' }, pic, h('span', {}, item.file.name + ' · ' + fmtSize(item.file.size))), h('div', {}, sel, ' ', rm),
       h('div', { class: 'bar' }, bar), st);
     item.setProgress = p => { item.progress = p; bar.style.width = Math.round(p * 100) + '%'; st.textContent = Math.round(p * 100) + '%'; };
     item.render = () => {
@@ -144,6 +153,8 @@ function createUploader({ getVisitId, onUploaded }) {
         const toRegister = items.filter(i => i.status === 'uploaded');
         if (toRegister.length) {
           const imgs = await api('registerImages', getVisitId(), toRegister.map(i => ({ id: i.driveFile.id, label: i.label })));
+          await Promise.all(toRegister.map(i => i.thumbReady));
+          toRegister.forEach(i => { if (i.thumb) thumbCache.set(i.driveFile.id, i.thumb); });
           toRegister.forEach(i => { i.status = 'done'; i.render(); });
           onUploaded(imgs);
         }

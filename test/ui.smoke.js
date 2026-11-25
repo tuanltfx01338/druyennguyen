@@ -27,7 +27,7 @@ function buildHtml(bootJson = '') {
     .replace(/<\?!= include\('client\/([\w.]+)'\); \?>/g, (_, f) => fs.readFileSync(path.join(SRC, 'client', f + '.html'), 'utf8'));
 }
 
-function boot(server, { withBoot = false } = {}) {
+function boot(server, { withBoot = false, observer = null } = {}) {
   const calls = [];
   const dom = new JSDOM(buildHtml(withBoot ? server.bootPayload_() : ''), {
     runScripts: 'dangerously', pretendToBeVisual: true,
@@ -48,6 +48,7 @@ function boot(server, { withBoot = false } = {}) {
         history: { push() {}, replace() {}, setChangeHandler() {} },
         url: { getLocation: cb => cb({ hash: '' }) },
       } };
+      if (observer) w.IntersectionObserver = observer;
       w.confirm = () => true;
       w.scrollTo = () => {};
       w.fetch = () => Promise.reject(new TypeError('Failed to fetch')); // simulate CORS block → server fallback
@@ -93,7 +94,7 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   await until(() => d.querySelectorAll('.thumbs img').length === 2);
   assert.ok(!/nợ|Chi phí|Đã thu/.test(d.getElementById('app').textContent));
   assert.match(d.body.textContent, /Viêm tuỷ R46/);
-  assert.ok(calls.filter(c => c === 'uploadChunk').length >= 4, 'big file sent in 2 MB chunks');
+  assert.equal(calls.filter(c => c === 'uploadChunk').length, 3, '5 MB file in two 4 MB chunks + the small file');
   const imgs = server.readActive_('Images');
   assert.equal(imgs.length, 2);
   assert.equal(Math.max(...imgs.map(i => i.size_bytes)), 5 * 1024 * 1024 + 123); // original size kept
@@ -476,5 +477,33 @@ test('fast paths: boot data shows Hôm nay without a call; revisits come from me
   assert.ok(d.querySelector('.ev').textContent.includes('07:00'));
   server.saveAppointment = realSave;
   assert.equal(server.getAppointment(r.appt_id).appointment.start_time, '07:00');
+  w.close();
+});
+
+test('thumbnails load lazily: only photos near the screen are requested', async () => {
+  const server = loadServer();
+  const pid = server.savePatient({ full_name: 'Ảnh Nhiều' });
+  const F = server.__gas.__File;
+  const visitIds = [];
+  for (let k = 0; k < 3; k++) {
+    const v = server.saveVisit({ patient_id: pid, visit_date: `2025-0${k + 1}-10`, reason: 'Khám ' + k });
+    const ctx = server.getUploadContext(v);
+    const files = [0, 1].map(n => new F(`a${k}${n}.jpg`, server.__gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 10));
+    server.registerImages(v, files.map(f => ({ id: f.id, label: 'khac' })));
+    visitIds.push(v);
+  }
+  const observed = [];
+  let fire;
+  class FakeIO { constructor(cb) { fire = els => cb(els.map(target => ({ isIntersecting: true, target }))); } observe(el) { observed.push(el); } unobserve() {} }
+  const { w, d, calls } = boot(server, { observer: FakeIO });
+  await until(() => d.querySelector('.stat'));
+  w.eval(`go('p/${pid}')`);
+  await until(() => d.querySelectorAll('details.visit').length === 3);
+  await new Promise(r => setTimeout(r, 120));
+  assert.equal(calls.filter(c => c === 'getThumbs').length, 0, 'nothing requested before it is on screen');
+  assert.equal(observed.length, 2, 'only the open (latest) visit is watched');
+  fire(observed.slice());
+  await until(() => d.querySelectorAll('.thumbs img').length === 2);
+  assert.equal(calls.filter(c => c === 'getThumbs').length, 1, 'one batched request');
   w.close();
 });
