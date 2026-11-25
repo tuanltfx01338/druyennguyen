@@ -23,10 +23,23 @@ test('client scripts parse as JavaScript', () => {
   }
 });
 
-test('client scripts still parse if every "//" to end of line is stripped', () => {
+// Apps Script strips JS comments without knowing about strings ('image/*' and 'https://' both broke in production).
+// Simulate that: remove every /* ... */ and every // to end of line, then the script must still parse.
+test('client scripts still parse after string-unaware comment stripping', () => {
   for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.js.html'))) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8').replace(/^\s*<script>/, '').replace(/<\/script>\s*$/, '')
+      .replace(/\/\*[\s\S]*?(?:\*\/|$(?![\s\S]))/g, '') // an unclosed /* eats the rest, like the real stripper
       .split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n');
-    assert.doesNotThrow(() => new Function(src), `${f} breaks when line comments are stripped`);
+    assert.doesNotThrow(() => new Function(src), `${f} breaks when comments are stripped`);
+  }
+});
+
+test('client scripts contain no "/*" or "*/" outside block comments', () => {
+  for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.js.html'))) {
+    fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((line, i) => {
+      const t = line.trim();
+      if (t.startsWith('/*') || t.startsWith('*') || t.startsWith('//')) return;
+      assert.ok(!/\/\*|\*\//.test(line.replace(/\/\*.*?\*\//g, "")), `${f}:${i + 1} has "/*" or "*/" in code — escape as "/\\*"`);
+    });
   }
 });

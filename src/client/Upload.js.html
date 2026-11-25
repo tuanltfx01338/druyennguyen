@@ -83,7 +83,7 @@ function createUploader({ getVisitId, onUploaded }) {
   const items = [];
   const list = h('div', { class: 'upload-list' });
   const batchLabel = h('select', { style: 'width:auto' }, labelOptions('khac'));
-  const input = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden' });
+  const input = h('input', { type: 'file', accept: 'image/\*', multiple: true, class: 'hidden' });
   const retryBtn = h('button', { type: 'button', class: 'hidden', onclick: () => startAll() }, 'Tải lại ảnh lỗi');
   const note = h('div', { class: 'muted' });
 
