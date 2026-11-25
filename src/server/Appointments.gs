@@ -77,13 +77,14 @@ function saveAppointment(data) {
     data = data || {};
     return withLock_(function () {
       var created = null, reused = null;
-      if (!data.patient_id && data.new_patient) {
+      // No patient picked = booking for someone not on file yet, even with nothing typed.
+      if (!data.patient_id) {
         // Validate the appointment before creating anyone, so a bad date never leaves an orphan patient.
         var check = validateAppointment(Object.assign({}, data, { patient_id: 'pending' }));
         if (check.errors.length) throw new Error(check.errors.join('; '));
-        var q = validateQuickPatient(data.new_patient);
+        var q = validateQuickPatient(data.new_patient || {});
         if (q.errors.length) throw new Error(q.errors.join('; '));
-        var existing = findPatientByPhone(readActive_('Patients'), q.value.phone);
+        var existing = q.value.phone ? findPatientByPhone(readActive_('Patients'), q.value.phone) : null;
         if (existing) {
           reused = { patient_id: existing.patient_id, full_name: existing.full_name };
           data = Object.assign({}, data, { patient_id: existing.patient_id });

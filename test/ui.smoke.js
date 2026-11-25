@@ -396,8 +396,6 @@ test('book an appointment for a patient not in the database: placeholder record,
   (await until(() => btn(d, 'Bệnh nhân mới:'))).click();
   const [name, phone] = await until(() => { const x = d.querySelectorAll('.new-pt input'); return x.length === 2 && x; });
   assert.equal(name.value, 'Cao Tuấn');
-  btn(d, 'Lưu').click();                                       // no phone yet → blocked, nothing saved
-  await until(() => d.getElementById('toast').textContent.includes('số điện thoại'));
   set(w, phone, '0988 777 666');
   d.querySelector('input[type=time]').value = '10:00'; d.querySelector('input[type=time]').dispatchEvent(new w.Event('input'));
   btn(d, "60'").click();
@@ -424,4 +422,17 @@ test('book an appointment for a patient not in the database: placeholder record,
   btn(d, 'Lưu').click();
   await until(() => server.getPatient(pid).patient.info_pending === '');
   w.close();
+});
+
+test('book with no patient info at all → saved under "Bệnh nhân mới"', async () => {
+  const server = loadServer();
+  const { d } = boot(server);
+  await until(() => d.querySelector('.stat'));
+  await menu(d, 'Lịch hẹn');
+  await until(() => d.querySelector('#app').textContent.includes('Lịch hẹn mới') && d.querySelector('input[type=search]'));
+  btn(d, 'Lưu').click();
+  await until(() => d.getElementById('toast').textContent.includes('Tạo hồ sơ tạm'));
+  const p = server.searchPatients('Bệnh nhân mới')[0];
+  assert.equal(p.full_name, 'Bệnh nhân mới');
+  assert.equal(p.info_pending, '1');
 });

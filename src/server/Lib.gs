@@ -267,12 +267,13 @@ function normalizeTime(v) {
   return isValidTime(t) ? t : null;
 }
 
-/** Bệnh nhân mới tạo nhanh khi đặt hẹn: chỉ cần họ tên + SĐT, phần còn lại bổ sung khi tới khám. */
+var NEW_PATIENT_NAME = 'Bệnh nhân mới';
+
+/** Bệnh nhân tạo nhanh khi đặt hẹn: mọi trường đều không bắt buộc; thiếu tên thì ghi "Bệnh nhân mới". */
 function validateQuickPatient(d) {
   var e = [];
-  var v = { full_name: text_(d, 'full_name', e, 'Họ tên'), phone: normalizePhones(d.phone) };
-  if (!v.full_name) e.push('Thiếu họ tên bệnh nhân mới');
-  if (!v.phone) e.push('Thiếu số điện thoại bệnh nhân mới (dùng để tránh tạo trùng hồ sơ)');
+  d = d || {};
+  var v = { full_name: text_(d, 'full_name', e, 'Họ tên') || NEW_PATIENT_NAME, phone: normalizePhones(d.phone) };
   return { errors: e, value: v };
 }
 

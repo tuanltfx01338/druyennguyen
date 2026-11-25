@@ -262,8 +262,16 @@ test('appointments: book a new patient (placeholder record), reuse by phone, com
   // bad appointment data → no patient created
   const before = s.searchPatients('').length;
   assert.throws(() => s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn', phone: '0988777666' }, appt_date: 'xx' }), /Ngày hẹn/);
-  assert.throws(() => s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn' }, appt_date: today }), /số điện thoại/);
   assert.equal(s.searchPatients('Cao Tuan').length, 0);
+  // nothing known at all → placeholder named "Bệnh nhân mới", no phone, still saved
+  const r0 = s.saveAppointment({ appt_date: today });
+  const p0 = plain(s.getPatient(r0.created_patient.patient_id)).patient;
+  assert.equal(p0.full_name, 'Bệnh nhân mới');
+  assert.equal(p0.phone, '');
+  assert.equal(p0.info_pending, '1');
+  // name only, no phone → new placeholder (no phone to dedupe on)
+  const rn = s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn' }, appt_date: today });
+  assert.ok(rn.created_patient);
 
   // new phone → placeholder patient + appointment
   const r = s.saveAppointment({ new_patient: { full_name: 'Cao Tuấn', phone: '0988 777 666' }, appt_date: today, start_time: '10:00', duration_min: 60 });

@@ -394,8 +394,8 @@ function patientPicker(initial, onPick, { allowNew = false } = {}) {
   const choose = p => { onPick(p); showSelected(p); };
   const showNew = query => {
     const digitsOnly = /^[\d\s.+-]+$/.test(query);
-    const name = h('input', { value: digitsOnly ? '' : query, placeholder: 'Họ tên', autocomplete: 'off' });
-    const phone = h('input', { type: 'tel', value: digitsOnly ? query : '', placeholder: 'Số điện thoại', autocomplete: 'off' });
+    const name = h('input', { value: digitsOnly ? '' : query, placeholder: 'Họ tên (để trống = Bệnh nhân mới)', autocomplete: 'off' });
+    const phone = h('input', { type: 'tel', value: digitsOnly ? query : '', placeholder: 'Số điện thoại (không bắt buộc)', autocomplete: 'off' });
     const match = h('div');
     const emit = () => onPick({ isNew: true, full_name: name.value.trim(), phone: phone.value.trim() });
     let t;
@@ -413,7 +413,7 @@ function patientPicker(initial, onPick, { allowNew = false } = {}) {
     box.replaceChildren(h('div', { class: 'new-pt' },
       h('b', {}, 'Bệnh nhân mới (chưa có hồ sơ)'),
       name, phone, match,
-      h('div', { class: 'hint' }, 'Lưu lịch hẹn sẽ tạo hồ sơ tạm với tên + SĐT. Nếu SĐT trùng hồ sơ có sẵn, app dùng hồ sơ đó, không tạo mới.'),
+      h('div', { class: 'hint' }, 'Không bắt buộc nhập gì: thiếu tên sẽ ghi "Bệnh nhân mới", bổ sung khi bệnh nhân tới khám. Có SĐT trùng hồ sơ có sẵn thì app dùng hồ sơ đó.'),
       h('button', { type: 'button', class: 'link-btn', onclick: () => { onPick(null); showSearch(); } }, '‹ Tìm bệnh nhân có sẵn')));
     emit(); checkPhone();
     (name.value ? phone : name).focus();
@@ -472,14 +472,11 @@ async function pageAppointmentForm(id) {
   const field = (label, el, full) => h('div', { class: full ? 'full' : '' }, h('label', {}, label), el);
   const back = () => { calState.date = date.value || calState.date; go('calendar'); };
   const save = h('button', { class: 'primary', onclick: async () => {
-    if (!patientId && !newPatient) return toast('Chọn bệnh nhân, hoặc bấm "Bệnh nhân mới" để nhập tên + SĐT', 'warn');
-    if (newPatient && !newPatient.full_name) return toast('Nhập họ tên bệnh nhân mới', 'warn');
-    if (newPatient && newPatient.phone.replace(/\D/g, '').length < 9) return toast('Nhập số điện thoại bệnh nhân mới', 'warn');
     if (time.value && !duration) return toast('Nhập thời lượng dự kiến', 'warn');
     save.disabled = true;
     try {
       const r = await api('saveAppointment', { appt_id: id || '', patient_id: patientId,
-        new_patient: newPatient ? { full_name: newPatient.full_name, phone: newPatient.phone } : null, appt_date: date.value, start_time: time.value,
+        new_patient: patientId ? null : { full_name: newPatient ? newPatient.full_name : '', phone: newPatient ? newPatient.phone : '' }, appt_date: date.value, start_time: time.value,
         duration_min: time.value ? duration : (duration || ''), title: title.value, notes: notes.value, status: id ? status.value : 'scheduled', visit_id: a.visit_id || '' });
       dirty = false;
       const who = r.created_patient ? ' · Tạo hồ sơ tạm ' + r.created_patient.patient_id
@@ -492,7 +489,8 @@ async function pageAppointmentForm(id) {
     pageHead(id ? 'Sửa lịch hẹn' : 'Lịch hẹn mới', { back }),
     h('section', { class: 'panel' },
       h('div', { class: 'grid-form' },
-        field('Bệnh nhân *', picker, true),
+        field('Bệnh nhân', picker, true),
+        patient ? null : h('div', { class: 'muted small' }, 'Chưa có hồ sơ cũng lưu được: để trống thì ghi "Bệnh nhân mới", bổ sung khi bệnh nhân tới khám.'),
         field('Ngày *', date), field('Giờ bắt đầu', time),
         field('Thời lượng dự kiến', h('div', {}, dur.el, endInfo), true),
         field('Nội dung', title, true), field('Ghi chú', notes, true),
