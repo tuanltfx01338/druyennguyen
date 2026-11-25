@@ -106,7 +106,10 @@ async function pageCalendar() {
         h('button', { class: 'primary', onclick: () => newAppointment({ appt_date: view === 'day' ? calState.date : '' }) }, '+ Lịch hẹn'))),
     summary,
     h('div', { ontouchstart: e => { touchX = dragState ? null : e.touches[0].clientX; },
-      ontouchend: e => { if (touchX == null || dragState) return; const dx = e.changedTouches[0].clientX - touchX; touchX = null; if (Math.abs(dx) > 80) step(dx > 0 ? -1 : 1); } }, body));
+      ontouchend: e => { if (touchX == null || dragState) return; const dx = e.changedTouches[0].clientX - touchX; touchX = null; if (Math.abs(dx) > 80) step(dx > 0 ? -1 : 1); } }, body),
+    h('div', { class: 'cal-legend', 'aria-label': 'Chú thích màu' },
+      [['Đã hẹn', '#0E8C85'], ['Đã đến', '#2F80ED'], ['Đã ghi kết quả', '#16A34A'], ['Không đến', '#F2A100'], ['Trùng giờ', '#D92D20']]
+        .map(([t, c]) => h('span', {}, h('i', { style: 'background:' + c }), t))));
 
   let appts;
   try { appts = await api('listAppointments', from, to); } catch (e) { return body.replaceChildren(errBox(e, pageCalendar)); }
@@ -487,12 +490,14 @@ async function pageAppointmentForm(id) {
   } }, 'Lưu');
   mount(
     pageHead(id ? 'Sửa lịch hẹn' : 'Lịch hẹn mới', { back }),
-    h('section', { class: 'panel' },
+    formSec('Bệnh nhân', 'user', '', picker,
+      patient ? null : h('div', { class: 'muted small form-hint' }, 'Chưa có hồ sơ cũng lưu được: để trống thì ghi "Bệnh nhân mới", bổ sung khi bệnh nhân tới khám.')),
+    formSec('Thời gian', 'clock', 'violet',
       h('div', { class: 'grid-form' },
-        field('Bệnh nhân', picker, true),
-        patient ? null : h('div', { class: 'muted small' }, 'Chưa có hồ sơ cũng lưu được: để trống thì ghi "Bệnh nhân mới", bổ sung khi bệnh nhân tới khám.'),
         field('Ngày *', date), field('Giờ bắt đầu', time),
-        field('Thời lượng dự kiến', h('div', {}, dur.el, endInfo), true),
+        field('Thời lượng dự kiến', h('div', {}, dur.el, endInfo), true))),
+    formSec('Nội dung', 'note', 'coral',
+      h('div', { class: 'grid-form' },
         field('Nội dung', title, true), field('Ghi chú', notes, true),
         id ? field('Trạng thái', status) : null)),
     h('div', { class: 'action-bar' }, save, h('button', { onclick: back }, 'Huỷ'),

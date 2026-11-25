@@ -69,6 +69,8 @@ const ICONS = {
   alert: '<path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4.2M12 17.2v.1"/>',
   phone: '<path d="M5.5 3.5h3.2l1.6 4.4-2.2 1.4a11.5 11.5 0 0 0 6.6 6.6l1.4-2.2 4.4 1.6v3.2a1.5 1.5 0 0 1-1.6 1.5A17 17 0 0 1 4 5.1a1.5 1.5 0 0 1 1.5-1.6z"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  idcard: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16c.6-1.5 1.7-2.2 3-2.2s2.4.7 3 2.2M14 10h4M14 13h3"/>',
   note: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2.8h6V4M8.5 10h7M8.5 13.5h7M8.5 17h4"/>',
   file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
   back: '<path d="m15 5-7 7 7 7"/>',
@@ -660,6 +662,12 @@ function formFields(defs, values) {
   return { el: h('div', { class: 'grid-form' }, els), data: () => Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value])), inputs };
 }
 
+/** Form section card: coloured icon chip + title, then fields. tone = '', 'coral', 'red', 'violet', 'amber'. */
+function formSec(title, ic, tone, ...kids) {
+  return h('section', { class: 'panel form-sec' },
+    h('h2', { class: 'sec-title' }, h('span', { class: 'sec-ic ' + (tone || '') }, icon(ic, 18)), h('span', {}, title)), ...kids);
+}
+
 /** Several phone numbers: one input each, "+ Thêm số". */
 function phoneList(value) {
   const box = h('div', { class: 'phones' });
@@ -694,21 +702,27 @@ async function pagePatientForm(id) {
     dirty = true;
     avBox.replaceChildren(h('span', { class: 'avatar', style: 'width:96px;height:96px' }, h('img', { src: dataUrl, alt: '' })));
   } });
-  const f = formFields([
+  const fMain = formFields([
     { name: 'full_name', label: 'Họ tên', required: true, full: true },
-    { name: 'national_id', label: 'Số CCCD (12 số)', inputmode: 'numeric' },
     { name: 'gender', label: 'Giới tính', type: 'select', options: ['', 'Nam', 'Nữ'] },
     { name: 'dob', label: 'Ngày sinh', type: 'date' },
     { name: 'birth_year', label: 'Năm sinh (nếu không rõ ngày)', type: 'number', inputmode: 'numeric' },
+  ], p);
+  const fId = formFields([
+    { name: 'national_id', label: 'Số CCCD (12 số)', inputmode: 'numeric' },
     { name: 'address', label: 'Địa chỉ', full: true },
+  ], p);
+  const fMed = formFields([
     { name: 'allergies', label: 'Dị ứng', type: 'textarea' },
     { name: 'systemic_diseases', label: 'Bệnh toàn thân', type: 'textarea' },
-    { name: 'current_meds', label: 'Thuốc đang dùng', type: 'textarea' },
-    { name: 'notes', label: 'Ghi chú', type: 'textarea' },
+    { name: 'current_meds', label: 'Thuốc đang dùng', type: 'textarea', full: true },
   ], p);
+  const fNote = formFields([{ name: 'notes', label: 'Ghi chú', type: 'textarea', full: true }], p);
+  const f = { inputs: { ...fMain.inputs, ...fId.inputs, ...fMed.inputs, ...fNote.inputs },
+    data: () => ({ ...fMain.data(), ...fId.data(), ...fMed.data(), ...fNote.data() }) };
   f.inputs.national_id.maxLength = 15;
   const phones = phoneList(p.phone);
-  f.el.insertBefore(h('div', { class: 'full' }, h('label', {}, 'Số điện thoại (có thể nhiều số)'), phones.el), f.inputs.address.parentNode);
+  fMain.el.append(h('div', { class: 'full' }, h('label', {}, 'Số điện thoại (có thể nhiều số)'), phones.el));
   const save = h('button', { class: 'primary', onclick: async () => {
     const d = f.data();
     if (!d.full_name.trim()) return toast('Thiếu họ tên', 'warn');
@@ -734,11 +748,14 @@ async function pagePatientForm(id) {
   const cancel = () => go(id ? 'p/' + id : 'patients');
   mount(pageHead(id ? 'Sửa thông tin' : 'Bệnh nhân mới', { back: cancel, sub: id ? p.full_name + ', ' + p.patient_id : null }),
     isPending(p) ? h('div', { class: 'med med-pending big' }, icon('edit', 20), h('span', {}, 'Hồ sơ tạo nhanh khi đặt hẹn. Bổ sung ngày sinh, giới tính, CCCD, dị ứng, bệnh nền… rồi bấm Lưu — hồ sơ sẽ hết là hồ sơ tạm.')) : null,
-    h('section', { class: 'panel' },
+    formSec('Thông tin chính', 'user', '',
       h('div', { class: 'av-row' }, avBox,
         h('div', {}, h('button', { type: 'button', onclick: () => avInput.click() }, icon('camera', 18), p.avatar_id ? 'Đổi ảnh chân dung' : 'Chụp / chọn ảnh chân dung'),
           h('div', { class: 'row-sub', style: 'margin-top:4px' }, 'Ảnh đại diện hồ sơ, tự thu nhỏ trước khi lưu')), avInput),
-      f.el),
+      fMain.el),
+    formSec('Sức khoẻ', 'heart', 'red', fMed.el),
+    formSec('Giấy tờ & địa chỉ', 'idcard', 'violet', fId.el),
+    formSec('Ghi chú', 'note', 'amber', fNote.el),
     h('div', { class: 'action-bar' }, save, h('button', { onclick: cancel }, 'Huỷ')));
   f.inputs.full_name.focus();
 }
@@ -756,16 +773,19 @@ async function pageVisitForm({ patientId, visitId }) {
   pendingVisit = null;
   if (fromAppt) visit = { visit_date: fromAppt.appt_date > todayStr() ? todayStr() : fromAppt.appt_date, reason: fromAppt.title || '' };
 
-  const f = formFields([
+  const fExam = formFields([
     { name: 'visit_date', label: 'Ngày khám', type: 'date', required: true },
     { name: 'teeth', label: 'Răng liên quan (FDI, VD 16, 46)', inputmode: 'numeric' },
     { name: 'reason', label: 'Lý do khám', full: true },
-    { name: 'diagnosis', label: 'Chẩn đoán', type: 'textarea' },
-    { name: 'treatment', label: 'Điều trị đã làm', type: 'textarea' },
+    { name: 'diagnosis', label: 'Chẩn đoán', type: 'textarea', full: true },
+  ], visit);
+  const fTreat = formFields([
+    { name: 'treatment', label: 'Điều trị đã làm', type: 'textarea', full: true },
     { name: 'plan', label: 'Kế hoạch tiếp', type: 'textarea' },
     { name: 'prescription', label: 'Đơn thuốc', type: 'textarea' },
-    { name: 'notes', label: 'Ghi chú', type: 'textarea' },
+    { name: 'notes', label: 'Ghi chú', type: 'textarea', full: true },
   ], visit);
+  const f = { inputs: { ...fExam.inputs, ...fTreat.inputs }, data: () => ({ ...fExam.data(), ...fTreat.data() }) };
 
   const existing = h('div', {}, thumbGrid(images, () => go('v/' + visitId, false)));
 
@@ -776,7 +796,7 @@ async function pageVisitForm({ patientId, visitId }) {
   let apDur = ap.duration_min ? String(ap.duration_min) : '';
   const apDurPick = durationPicker(apDur, v => { apDur = v; dirty = true; });
   const apTitle = h('input', { value: ap.title || '', placeholder: 'Mặc định lấy theo "Kế hoạch tiếp"', oninput: () => { dirty = true; } });
-  const apSection = h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Hẹn tái khám'),
+  const apSection = formSec('Hẹn tái khám', 'calendar', 'violet',
     ap.appt_id ? h('div', { class: 'row-sub' }, `Đã có lịch hẹn (${(APPT_STATUS[ap.status] || {}).label || ''}). Sửa ở đây hoặc trên Lịch hẹn.`) : null,
     h('div', { class: 'grid-form' },
       h('div', {}, h('label', {}, 'Ngày hẹn'), apDate), h('div', {}, h('label', {}, 'Giờ (để trống nếu chưa chốt)'), apTime),
@@ -827,8 +847,9 @@ async function pageVisitForm({ patientId, visitId }) {
       h('div', { class: 'row-av' }, avatar(patient, 44), h('div', { class: 'row-main' }, h('b', { class: 'p-name sm' }, patient.full_name), facts(ageText(patient), patient.patient_id))),
       medAlerts(patient)),
     fromAppt ? h('div', { class: 'info' }, icon('calendar', 18), h('span', {}, `Theo lịch hẹn ${fmtDate(fromAppt.appt_date)} ${fromAppt.start_time || ''}${fromAppt.title ? ', ' + fromAppt.title : ''}. Lưu xong, lịch hẹn tự chuyển "Đã đến".`)) : null,
-    h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Kết quả khám'), f.el),
-    h('section', { class: 'panel' }, h('h2', { class: 'sec-title' }, 'Ảnh chụp'), existing, uploader.el),
+    formSec('Khám & chẩn đoán', 'tooth', '', fExam.el),
+    formSec('Điều trị', 'pill', 'coral', fTreat.el),
+    formSec('Ảnh chụp', 'camera', 'amber', existing, uploader.el),
     apSection,
     h('div', { class: 'action-bar' }, save, h('button', { onclick: () => go('p/' + patientId) }, 'Huỷ'),
       visitId ? h('button', { class: 'danger', onclick: async () => {
