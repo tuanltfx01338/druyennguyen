@@ -308,3 +308,45 @@ test('setup adds header for new trailing columns on an existing sheet', () => {
   assert.equal(sh.getRange(1, n, 1, 1).getValues()[0][0], 'info_pending');
   assert.equal(gas.PropertiesService.getScriptProperties().getProperty('SCHEMA_VERSION'), String(s.SCHEMA_VERSION));
 });
+
+test('table cache: served from cache, invalidated by app writes, refreshCache picks up manual Sheet edits', () => {
+  const { s, sheet } = load();
+  const id = s.savePatient({ full_name: 'Đỗ Cache', phone: '0901000001' });
+  assert.equal(plain(s.getPatient(id)).patient.full_name, 'Đỗ Cache');   // fills the cache
+  // edit the Sheet by hand (not through the app)
+  const sh = sheet('Patients');
+  const col = s.TABLES.Patients.indexOf('full_name') + 1;
+  const row = plain(s.readAll_('Patients')).find(p => p.patient_id === id)._row;
+  sh.getRange(row, col, 1, 1).setValues([['Sửa tay']]);
+  assert.equal(plain(s.getPatient(id)).patient.full_name, 'Đỗ Cache', 'cached snapshot until refresh');
+  s.refreshCache();
+  assert.equal(plain(s.getPatient(id)).patient.full_name, 'Sửa tay');
+  // an app write is visible immediately
+  const p = plain(s.getPatient(id)).patient;
+  s.savePatient(Object.assign({}, p, { full_name: 'Qua app' }));
+  assert.equal(plain(s.getPatient(id)).patient.full_name, 'Qua app');
+  assert.equal(plain(s.searchPatients('Qua app'))[0].patient_id, id);
+  // callers may mutate what they read without corrupting the next read
+  s.readAll_('Patients').forEach(r => { r.full_name = 'X'; });
+  assert.equal(plain(s.getPatient(id)).patient.full_name, 'Qua app');
+});
+
+test('table cache: large tables are chunked under the 100 KB value limit', () => {
+  const { s } = load();
+  const rows = [];
+  for (let i = 0; i < 400; i++) rows.push({ full_name: 'Bệnh nhân dài ' + i, phone: '09' + String(10000000 + i), notes: 'Ghi chú '.repeat(40) });
+  rows.forEach(r => s.savePatient(r));
+  s.refreshCache();
+  assert.equal(s.searchPatients('').length, 20);
+  assert.equal(s.searchPatients('Bệnh nhân dài 399').length, 1);
+});
+
+test('boot payload embeds the dashboard and quota', () => {
+  const { s } = load();
+  s.savePatient({ full_name: 'Boot Test' });
+  const b = JSON.parse(s.bootPayload_());
+  assert.ok(b.dashboard && b.dashboard.stats);
+  assert.equal(b.dashboard.stats.patients, 1);
+  assert.ok(b.quota.limit > 0);
+  assert.match(b.today, /^\d{4}-\d{2}-\d{2}$/);
+});

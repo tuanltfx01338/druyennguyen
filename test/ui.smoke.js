@@ -20,14 +20,16 @@ function loadServer(opts) {
   return ctx;
 }
 
-function buildHtml() {
+const escHtml = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function buildHtml(bootJson = '') {
   return fs.readFileSync(path.join(SRC, 'client/Index.html'), 'utf8')
+    .replace('<?= boot ?>', escHtml(bootJson)) // HtmlService escapes <?= ?> output the same way
     .replace(/<\?!= include\('client\/([\w.]+)'\); \?>/g, (_, f) => fs.readFileSync(path.join(SRC, 'client', f + '.html'), 'utf8'));
 }
 
-function boot(server) {
+function boot(server, { withBoot = false } = {}) {
   const calls = [];
-  const dom = new JSDOM(buildHtml(), {
+  const dom = new JSDOM(buildHtml(withBoot ? server.bootPayload_() : ''), {
     runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       const runner = (ok = () => {}, fail = () => {}) => new Proxy({}, {
@@ -116,6 +118,8 @@ test('create patient → visit with 2 original photos (server-chunk fallback) �
   const F = server.__gas.__File;
   const f = new F('old.jpg', server.__gas.DriveApp.getFolderById(ctx.folderId), 'image/jpeg', '', 50);
   server.registerImages(v2, [{ id: f.id, label: 'xquang' }]);
+  // These writes bypassed this browser (like another device); the page refreshes in the background once its copy is >1 s old.
+  await new Promise(r => setTimeout(r, 1100));
   d.querySelector('.ph-back').click();
   await until(() => btn(d, 'Bệnh nhân mới'));
   set(w, await until(() => d.querySelector('input.search')), 'nguyen');
@@ -435,4 +439,42 @@ test('book with no patient info at all → saved under "Bệnh nhân mới"', as
   const p = server.searchPatients('Bệnh nhân mới')[0];
   assert.equal(p.full_name, 'Bệnh nhân mới');
   assert.equal(p.info_pending, '1');
+});
+
+test('fast paths: boot data shows Hôm nay without a call; revisits come from memory; failed drag is rolled back', async () => {
+  const server = loadServer();
+  const pad = n => String(n).padStart(2, '0');
+  const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+  const pid = server.savePatient({ full_name: 'Lê Nhanh', phone: '0911222333' });
+  const r = server.saveAppointment({ patient_id: pid, appt_date: today, start_time: '09:00', duration_min: 30, title: 'Kiểm tra' });
+  const { w, d, calls } = boot(server, { withBoot: true });
+  await until(() => d.querySelector('.stat'));
+  assert.ok(!calls.includes('getDashboard'), 'dashboard came from the page itself');
+  assert.ok(!calls.includes('getStorageQuota'), 'quota came from the page itself');
+  await until(() => calls.includes('listAppointments') && calls.includes('searchPatients')); // prefetched in the background
+
+  // calendar opens from the prefetched data
+  const before = calls.length;
+  d.querySelector('nav a[data-path="calendar"]').click();
+  await until(() => d.querySelector('.mv'));
+  assert.equal(calls.slice(before).filter(c => c === 'listAppointments').length <= 3, true); // only neighbour prefetch/refresh, no blocking load
+
+  // drag that saves: calendar and server agree
+  w.eval(`calState.view = 'day'; calState.date = '${today}';`);
+  w.eval('pageCalendar()');
+  await until(() => d.querySelector('.ev'));
+  const mv = (from, to) => w.eval(`moveAppointment(calAppts.find(x => x.appt_id === '${r.appt_id}'), { appt_date: '${today}', start_time: '${to}', duration_min: 30 }, { appt_date: '${today}', start_time: '${from}', duration_min: 30 })`);
+  mv('09:00', '07:00');
+  await until(() => d.getElementById('toast').textContent.includes('Đã dời'));
+  assert.equal(server.getAppointment(r.appt_id).appointment.start_time, '07:00');
+  assert.ok(d.querySelector('.ev').textContent.includes('07:00'));
+  // drag that fails on the server: put back where it was, with a message
+  const realSave = server.saveAppointment;
+  server.saveAppointment = () => { throw new Error('Mất kết nối'); };
+  mv('07:00', '08:00');
+  await until(() => d.getElementById('toast').textContent.includes('Chưa lưu được'));
+  assert.ok(d.querySelector('.ev').textContent.includes('07:00'));
+  server.saveAppointment = realSave;
+  assert.equal(server.getAppointment(r.appt_id).appointment.start_time, '07:00');
+  w.close();
 });

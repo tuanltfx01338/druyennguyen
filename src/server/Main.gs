@@ -2,7 +2,9 @@ function doGet() {
   var props = PropertiesService.getScriptProperties();
   // Re-run the idempotent setup after an update that adds columns, so headers/formats exist without a manual step.
   if (!props.getProperty('SHEET_ID') || props.getProperty('SCHEMA_VERSION') !== String(SCHEMA_VERSION)) setup();
-  return HtmlService.createTemplateFromFile('client/Index').evaluate()
+  var page = HtmlService.createTemplateFromFile('client/Index');
+  page.boot = bootPayload_();
+  return page.evaluate()
     .setTitle('Sổ bệnh án Nha khoa')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
@@ -73,12 +75,35 @@ function setup() {
     ScriptApp.newTrigger('weeklyBackup').timeBased().everyWeeks(1)
       .onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(22).create();
   }
+  Object.keys(TABLES).forEach(invalidateTable_); // headers or the sheet itself may have changed
   return 'OK';
 }
 
 function getStorageQuota() {
-  return api_('getStorageQuota', function () {
-    var used = DriveApp.getStorageUsed(), limit = DriveApp.getStorageLimit();
-    return { used: used, limit: limit, ratio: limit ? used / limit : 0 };
-  });
+  return api_('getStorageQuota', storageQuota_);
+}
+/** Drive quota changes slowly; cache it for an hour so the first screen does not wait on Drive. */
+function storageQuota_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('quota');
+  if (hit) return JSON.parse(hit);
+  var used = DriveApp.getStorageUsed(), limit = DriveApp.getStorageLimit();
+  var q = { used: used, limit: limit, ratio: limit ? used / limit : 0 };
+  cache.put('quota', JSON.stringify(q), 3600);
+  return q;
+}
+/**
+ * Data for the first screen, embedded in the page so "Hôm nay" shows without another round trip.
+ * Any failure here only costs that shortcut: the client then loads the dashboard the normal way.
+ */
+function bootPayload_() {
+  var t0 = Date.now();
+  try {
+    return JSON.stringify({ today: today_(), at: Date.now(), dashboard: buildDashboard(readActive_('Patients'), readActive_('Visits'), today_(), readActive_('Appointments')), quota: storageQuota_() });
+  } catch (e) {
+    console.error('bootPayload_: ' + e.message);
+    return 'null';
+  } finally {
+    console.log('[perf] doGet boot ' + (Date.now() - t0) + ' ms');
+  }
 }

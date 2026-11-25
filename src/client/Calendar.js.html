@@ -71,22 +71,31 @@ const conflictPartners = (a, appts) => appts.filter(b => b.appt_id !== a.appt_id
 
 let calAppts = []; // appointments of the visible range (for conflict lookups in the sheet)
 
+/** Date range and heading of a calendar view. */
+function calRange(view, date) {
+  if (view === 'day') { const d = toDate(date); return { from: date, to: date, title: `${WD_LONG[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`, sub: String(d.getFullYear()) }; }
+  if (view === 'week') { const from = mondayOf(date), to = shiftDays(from, 6); return { from, to, title: `${fmtDate(from).slice(0, 5)} – ${fmtDate(to).slice(0, 5)}`, sub: 'Tuần ' + fmtDate(to).slice(6) }; }
+  const d = toDate(date);
+  const from = mondayOf(toStr(new Date(d.getFullYear(), d.getMonth(), 1)));
+  return { from, to: shiftDays(from, 41), title: `Tháng ${d.getMonth() + 1}`, sub: String(d.getFullYear()) };
+}
+/** Same view, n steps earlier/later (used by the arrows and by prefetching the neighbours). */
+function calShift(view, date, n) {
+  if (view === 'day') return shiftDays(date, n);
+  if (view === 'week') return shiftDays(date, 7 * n);
+  const d = toDate(date); return toStr(new Date(d.getFullYear(), d.getMonth() + n, 1));
+}
+function prefetchCalendar(view = calState.view, date = calState.date) {
+  const r = calRange(view, date);
+  prefetch('listAppointments', r.from, r.to);
+}
+
 async function pageCalendar() {
   const { view } = calState;
   const today = todayStr();
-  let from, to, title, sub = '';
-  if (view === 'day') { from = to = calState.date; const d = toDate(from); title = `${WD_LONG[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`; sub = String(d.getFullYear()); }
-  else if (view === 'week') { from = mondayOf(calState.date); to = shiftDays(from, 6); title = `${fmtDate(from).slice(0, 5)} – ${fmtDate(to).slice(0, 5)}`; sub = 'Tuần ' + fmtDate(to).slice(6); }
-  else {
-    const d = toDate(calState.date);
-    from = mondayOf(toStr(new Date(d.getFullYear(), d.getMonth(), 1)));
-    to = shiftDays(from, 41);
-    title = `Tháng ${d.getMonth() + 1}`; sub = String(d.getFullYear());
-  }
+  const { from, to, title, sub } = calRange(view, calState.date);
   const step = n => {
-    if (view === 'day') calState.date = shiftDays(calState.date, n);
-    else if (view === 'week') calState.date = shiftDays(calState.date, 7 * n);
-    else { const d = toDate(calState.date); calState.date = toStr(new Date(d.getFullYear(), d.getMonth() + n, 1)); }
+    calState.date = calShift(view, calState.date, n);
     calState.scroll = null;
     pageCalendar();
   };
@@ -113,7 +122,11 @@ async function pageCalendar() {
         .map(([t, c]) => h('span', {}, h('i', { style: 'background:' + c }), t))));
 
   let appts;
-  try { appts = await api('listAppointments', from, to); } catch (e) { return body.replaceChildren(errBox(e, pageCalendar)); }
+  const shownRange = calState.view + calState.date;
+  try { appts = await cachedApi('listAppointments', [from, to], rerenderIfIdle('calendar', () => calState.view + calState.date === shownRange && !dragState)); }
+  catch (e) { return body.replaceChildren(errBox(e, pageCalendar)); }
+  // Swiping to the previous/next period should feel instant.
+  setTimeout(() => { prefetchCalendar(view, calShift(view, calState.date, 1)); prefetchCalendar(view, calShift(view, calState.date, -1)); }, 200);
   calAppts = appts;
   const conflicts = conflictIds(appts);
   const active = appts.filter(a => a.status !== 'cancelled');
@@ -283,19 +296,40 @@ function enableDrag(el, a, g) {
 const currentScroll = () => { const s = document.querySelector('.tg-scroll'); return s ? s.scrollTop : null; };
 
 /** Saves a new date/time/duration; warns on overlap and offers undo. */
+/**
+ * Put an appointment into every remembered calendar range (or take it out of ranges it left),
+ * and forget pages that also list appointments, so they reload.
+ */
+function patchCachedAppointment(appt) {
+  for (const [key, entry] of memo) {
+    if (key.startsWith('listAppointments')) {
+      const [from, to] = JSON.parse(key.slice('listAppointments'.length));
+      const list = entry.data.filter(x => x.appt_id !== appt.appt_id);
+      if (appt.appt_date >= from && appt.appt_date <= to) list.push(appt);
+      list.sort((x, y) => (x.appt_date + (x.start_time || '')).localeCompare(y.appt_date + (y.start_time || '')));
+      memo.set(key, { data: list, at: Date.now() });
+    } else if (/^(getDashboard|getPatient|getAppointment)/.test(key)) memo.delete(key);
+  }
+}
+
+/** Drag/resize: redraw at once from memory, save in the background, put it back if the save fails. */
 async function moveAppointment(a, after, before) {
   calState.scroll = currentScroll();
+  const moved = { ...a, ...after };
+  patchCachedAppointment(moved);
+  pageCalendar();
   try {
-    const r = await api('saveAppointment', { ...a, ...after });
-    const undo = { label: 'Hoàn tác', onClick: async () => {
-      try { await api('saveAppointment', { ...a, ...before }); toast('Đã hoàn tác'); calState.scroll = currentScroll(); pageCalendar(); }
-      catch (e) { toast(errMsg(e), 'error'); }
-    } };
+    const r = await rpc('saveAppointment', moved); // rpc, not api: keep the patched cache instead of reloading
+    const undo = { label: 'Hoàn tác', onClick: () => moveAppointment(moved, before, after) };
     const when = `${fmtDate(after.appt_date).slice(0, 5)} ${after.start_time}–${minToTime(toMin(after.start_time) + Number(after.duration_min))}`;
     if (r.conflicts.length) toast(`${a.full_name} ${when} trùng giờ với ${r.conflicts.join(', ')}`, 'warn', undo);
     else toast(`Đã dời ${a.full_name} sang ${when}`, '', undo);
-  } catch (e) { toast(errMsg(e), 'error'); }
-  pageCalendar();
+  } catch (e) {
+    patchCachedAppointment(a);
+    calState.scroll = currentScroll();
+    pageCalendar();
+    toast('Chưa lưu được, đã trả lịch về chỗ cũ: ' + errMsg(e), 'error');
+  }
 }
 
 function monthView(from, appts, today, conflicts) {
@@ -451,8 +485,8 @@ async function pageAppointmentForm(id) {
   if (id || a.patient_id) {
     loading();
     try {
-      if (id) { const r = await api('getAppointment', id); a = r.appointment; patient = r.patient; }
-      else patient = (await api('getPatient', a.patient_id)).patient;
+      if (id) { const r = await cachedApi('getAppointment', [id]); a = r.appointment; patient = r.patient; }
+      else patient = (await cachedApi('getPatient', [a.patient_id])).patient;
     } catch (e) { return mount(errBox(e, () => pageAppointmentForm(id))); }
   }
   if (!a.appt_date) a.appt_date = todayStr();

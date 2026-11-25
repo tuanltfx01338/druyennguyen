@@ -1,8 +1,65 @@
 <script>
 'use strict';
 /* ---------- core helpers ---------- */
-const api = (fn, ...args) => new Promise((resolve, reject) =>
-  google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args));
+/** Raw server call as a Promise; each call's round-trip time goes to perfLog (and the console) for tuning. */
+const perfLog = [];
+const rpc = (fn, ...args) => new Promise((resolve, reject) => {
+  const t0 = performance.now();
+  const done = settle => v => {
+    const ms = Math.round(performance.now() - t0);
+    perfLog.push([fn, ms]); if (perfLog.length > 100) perfLog.shift();
+    console.debug('[rpc]', fn, ms + ' ms');
+    settle(v);
+  };
+  google.script.run.withSuccessHandler(done(resolve)).withFailureHandler(done(reject))[fn](...args);
+});
+
+/*
+ * Memory cache of read results (never written to disk: patient data stays off the device).
+ * Pages show the remembered result at once and refresh it in the background; any successful write empties it.
+ */
+const READS = new Set(['getDashboard', 'listAppointments', 'searchPatients', 'getPatient', 'getVisit', 'getAppointment', 'getStorageQuota', 'searchVisitsByDate']);
+const NEUTRAL = new Set(['getThumbs', 'getPreview', 'getUploadContext', 'getAvatarUploadContext', 'startServerUpload', 'uploadChunk', 'importPreview', 'importImagesMatch']);
+const memo = new Map();
+// Younger than this: used as is (covers prefetch → tap, boot data → first screen); older: shown, then refreshed in the background.
+const FRESH_MS = 5000;
+const api = (fn, ...args) => rpc(fn, ...args).then(r => { if (!READS.has(fn) && !NEUTRAL.has(fn)) memo.clear(); return r; });
+/** Stale-while-revalidate read; onChange(data) runs only if the background refresh brought different data. */
+function cachedApi(fn, args = [], onChange) {
+  const key = fn + JSON.stringify(args);
+  const hit = memo.get(key);
+  // Pages that can redraw (onChange) always check in the background; one-shot readers trust anything recent.
+  if (hit && Date.now() - hit.at < (onChange ? 1000 : FRESH_MS)) return Promise.resolve(hit.data);
+  const fresh = rpc(fn, ...args).then(data => {
+    const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(data);
+    memo.set(key, { data, at: Date.now() });
+    if (hit && changed && onChange) onChange(data);
+    return data;
+  });
+  if (!hit) return fresh;
+  fresh.catch(e => console.warn('background refresh failed:', fn, e));
+  return Promise.resolve(hit.data);
+}
+const prefetch = (fn, ...args) => { cachedApi(fn, args).catch(() => {}); };
+/** For onChange: redraw the page if it is still showing and the doctor is not typing or editing. */
+function rerenderIfIdle(path, stillSame = () => true) {
+  return () => {
+    if (curPath !== path || dirty || !stillSame()) return;
+    const a = document.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    const y = window.scrollY; render(path); window.scrollTo(0, y);
+  };
+}
+/** Data embedded by doGet (see bootPayload_): the first screen needs no extra round trip. */
+function seedFromBoot() {
+  try {
+    const el = document.getElementById('boot');
+    const b = el && el.textContent.trim() ? JSON.parse(el.textContent) : null;
+    if (!b || b.today !== todayStr()) return;
+    if (b.dashboard) memo.set('getDashboard[]', { data: b.dashboard, at: Date.now() });
+    if (b.quota) memo.set('getStorageQuota[]', { data: b.quota, at: Date.now() });
+  } catch (e) { console.warn('boot data ignored:', e); }
+}
 
 /** DOM builder — strings become text nodes (never innerHTML) → no XSS from patient data. */
 function h(tag, attrs, ...kids) {
@@ -224,6 +281,7 @@ function start() {
   document.getElementById('nav-add').addEventListener('click', openAddMenu);
   google.script.history.setChangeHandler(e => { dirty = false; uploadBusy = false; render((e.state && e.state.path) || ''); });
   window.addEventListener('beforeunload', e => { if (dirty || uploadBusy) { e.preventDefault(); e.returnValue = ''; } });
+  seedFromBoot();
   google.script.url.getLocation(loc => render(loc.hash || ''));
 }
 
@@ -256,7 +314,7 @@ function pagePatients() {
     const my = ++seq;
     results.replaceChildren(h('div', { class: 'muted pad' }, 'Đang tìm…'));
     try {
-      const list = await api('searchPatients', q.value);
+      const list = q.value.trim() ? await api('searchPatients', q.value) : await cachedApi('searchPatients', ['']);
       if (my !== seq) return;
       results.replaceChildren(
         h('div', { class: 'list-cap' }, q.value ? `${list.length} kết quả` : 'Mở gần đây'),
@@ -419,7 +477,7 @@ async function pageDashboard() {
     shell, quota);
 
   let d;
-  try { d = await api('getDashboard'); } catch (e) { return shell.replaceChildren(errBox(e, pageDashboard)); }
+  try { d = await cachedApi('getDashboard', [], rerenderIfIdle(curPath)); } catch (e) { return shell.replaceChildren(errBox(e, pageDashboard)); }
   const s = d.stats;
   const list = (items, empty) => items.length ? items : [h('div', { class: 'empty' }, empty)];
   const nextDays = d.upcoming.filter(a => a.appt_date > d.today); // today is in the work list
@@ -454,7 +512,12 @@ async function pageDashboard() {
           s.missed30 > d.missed.length ? h('div', { class: 'row-sub' }, `Hiển thị 10/${s.missed30} gần nhất`) : null),
         h('section', { class: 'panel' }, h('h3', { class: 'sec-title' }, 'Lần khám 6 tháng gần nhất'), monthChart(d.monthly, 'visits', String)))));
 
-  api('getStorageQuota').then(q => {
+  quota.after(h('button', { type: 'button', class: 'link-btn refresh-link', onclick: async () => {
+    try { await api('refreshCache'); toast('Đã làm mới dữ liệu'); render(curPath); } catch (e) { toast(errMsg(e), 'error'); }
+  } }, 'Làm mới dữ liệu (sau khi sửa trực tiếp trong Google Sheet)'));
+  // The doctor's next taps are usually Lịch hẹn or Bệnh nhân: load them while she reads this screen.
+  setTimeout(() => { prefetchCalendar(); prefetch('searchPatients', ''); }, 300);
+  cachedApi('getStorageQuota').then(q => {
     const pct = Math.round(q.ratio * 100);
     quota.className = 'quota' + (q.ratio > 0.8 ? ' warn' : '');
     quota.replaceChildren(`Dung lượng Drive: ${fmtSize(q.used)} / ${q.limit ? fmtSize(q.limit) : 'không giới hạn'} (${pct}%)`
@@ -470,7 +533,7 @@ const kv = pairs => h('dl', { class: 'kv' }, pairs.filter(x => x[1] !== '' && x[
 async function pagePatient(id, tab = 'history', labelFilter = '') {
   loading();
   let data;
-  try { data = await api('getPatient', id); } catch (e) { return mount(errBox(e, () => pagePatient(id, tab))); }
+  try { data = await cachedApi('getPatient', [id], rerenderIfIdle(curPath)); } catch (e) { return mount(errBox(e, () => pagePatient(id, tab))); }
   const p = data.patient;
   data.visits.forEach(v => v.images.forEach(i => { i.visit_date = v.visit_date; }));
   const allImages = data.visits.flatMap(v => v.images);
@@ -687,7 +750,7 @@ async function pagePatientForm(id) {
   let p = {};
   if (id) {
     loading();
-    try { p = (await api('getPatient', id)).patient; } catch (e) { return mount(errBox(e, () => pagePatientForm(id))); }
+    try { p = (await cachedApi('getPatient', [id])).patient; } catch (e) { return mount(errBox(e, () => pagePatientForm(id))); }
   }
   // Portrait: compressed in the browser, uploaded after the patient is saved.
   let newAvatar = null; // { blob, dataUrl }
@@ -765,7 +828,7 @@ async function pageVisitForm({ patientId, visitId }) {
   let visit = { visit_date: todayStr() }, patient, images = [];
   try {
     if (visitId) { const r = await api('getVisit', visitId); visit = r.visit; patient = r.patient; images = r.visit.images; }
-    else patient = (await api('getPatient', patientId)).patient;
+    else patient = (await cachedApi('getPatient', [patientId])).patient;
   } catch (e) { return mount(errBox(e, () => pageVisitForm({ patientId, visitId }))); }
   patientId = patient.patient_id;
   // Recording the result of an appointment (from calendar / dashboard): prefill and link on save.

@@ -95,6 +95,7 @@ function createGas(opts = {}) {
     SpreadsheetApp: {
       create: n => new Spreadsheet(n),
       openById: id => { const s = spreadsheets.get(id); if (!s) throw new Error('no spreadsheet ' + id); return s; },
+      flush: () => {},
     },
     DriveApp: {
       createFolder: n => root.createFolder(n),
@@ -126,7 +127,12 @@ function createGas(opts = {}) {
     MimeType: { MICROSOFT_EXCEL: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', GOOGLE_SHEETS: 'application/vnd.google-apps.spreadsheet', PLAIN_TEXT: 'text/plain' },
     PropertiesService: { getScriptProperties: () => ({ getProperties: () => ({ ...props }), getProperty: k => props[k] ?? null, setProperties: o => Object.assign(props, o) }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
-    CacheService: { getScriptCache: () => ({ getAll: ks => Object.fromEntries(ks.filter(k => k in cache).map(k => [k, cache[k]])), putAll: o => Object.assign(cache, o) }) },
+    CacheService: { getScriptCache: () => ({
+      get: k => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = String(v); },
+      getAll: ks => Object.fromEntries(ks.filter(k => k in cache).map(k => [k, cache[k]])),
+      putAll: o => { for (const [k, v] of Object.entries(o)) { if (String(v).length > 100000) throw new Error('Argument too large'); cache[k] = String(v); } },
+      remove: k => { delete cache[k]; },
+    }) },
     ScriptApp: {
       getOAuthToken: () => 'tok', getProjectTriggers: () => [],
       newTrigger: () => { const c = { timeBased: () => c, everyWeeks: () => c, onWeekDay: () => c, atHour: () => c, create: () => ({}) }; return c; },
